@@ -1,0 +1,66 @@
+name: real-time-visual-defect-detection
+
+x-app-common: &app-common
+  image: python:3.11-bookworm
+  working_dir: /workspace
+  volumes:
+    - .:/workspace
+    - ./data:/workspace/data
+    - pip-cache:/root/.cache/pip
+  environment:
+    PYTHONPATH: /workspace/src
+    PYTHONDONTWRITEBYTECODE: "1"
+    PIPELINE_CONFIG: ${PIPELINE_CONFIG:-src/real_time_visual_defect_detection/config/default.yaml}
+    PIPELINE_DATASET_PATH: ${PIPELINE_DATASET_PATH:-}
+    PIPELINE_EXTRACT_DIR: ${PIPELINE_EXTRACT_DIR:-}
+    PIPELINE_EXTRA_ARGS: ${PIPELINE_EXTRA_ARGS:-}
+    PYTEST_ARGS: ${PYTEST_ARGS:-}
+  entrypoint: ["/bin/sh", "-lc"]
+
+services:
+  dev:
+    <<: *app-common
+    profiles: ["dev"]
+    stdin_open: true
+    tty: true
+    command: >
+      python -m pip install --upgrade pip &&
+      pip install -e . &&
+      exec bash
+
+  benchmark:
+    <<: *app-common
+    profiles: ["bench"]
+    command: >
+      set -eu;
+      python -m pip install --upgrade pip;
+      pip install -e .;
+      cmd='time python scripts/main.py --config "$${PIPELINE_CONFIG}"';
+      if [ -n "$${PIPELINE_DATASET_PATH}" ]; then
+        cmd="$${cmd} --dataset-path \"$${PIPELINE_DATASET_PATH}\"";
+      fi;
+      if [ -n "$${PIPELINE_EXTRACT_DIR}" ]; then
+        cmd="$${cmd} --extract-dir \"$${PIPELINE_EXTRACT_DIR}\"";
+      fi;
+      if [ -n "$${PIPELINE_EXTRA_ARGS}" ]; then
+        cmd="$${cmd} $${PIPELINE_EXTRA_ARGS}";
+      fi;
+      echo "Running: $${cmd}";
+      eval "$${cmd}"
+
+  test:
+    <<: *app-common
+    profiles: ["test", "ci"]
+    command: >
+      set -eu;
+      python -m pip install --upgrade pip;
+      pip install -e .;
+      cmd='pytest -q -p no:cacheprovider';
+      if [ -n "$${PYTEST_ARGS}" ]; then
+        cmd="pytest $${PYTEST_ARGS}";
+      fi;
+      echo "Running: $${cmd}";
+      eval "$${cmd}"
+
+volumes:
+  pip-cache:

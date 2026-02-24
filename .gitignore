@@ -5,3 +5,25 @@ data/
 *.jpeg
 *.mp4
 *.avi
+
+# Python cache / test cache
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Local environments
+.venv/
+.env
+
+# Pipeline artifacts
+data/runs/
+data/raw/extracted/
+
+# Model checkpoints / weights
+*.pt
+*.ckpt
+*.pth
+
+# Docker build artifacts
+.docker/
+*.dockerbuild

@@ -2,3 +2,15 @@ numpy
 pyyaml
 opencv-python
 scikit-learn
+torch
+torchvision
+anomalib<2.0,>=1.0
+psutil
+plotly
+pandas
+tqdm
+umap-learn
+
+[gpu]
+torch
+torchvision

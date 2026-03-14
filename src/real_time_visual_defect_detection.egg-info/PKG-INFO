@@ -9,6 +9,17 @@ Requires-Dist: numpy
 Requires-Dist: pyyaml
 Requires-Dist: opencv-python
 Requires-Dist: scikit-learn
+Requires-Dist: torch
+Requires-Dist: torchvision
+Requires-Dist: anomalib<2.0,>=1.0
+Requires-Dist: psutil
+Requires-Dist: plotly
+Requires-Dist: pandas
+Requires-Dist: tqdm
+Requires-Dist: umap-learn
+Provides-Extra: gpu
+Requires-Dist: torch; extra == "gpu"
+Requires-Dist: torchvision; extra == "gpu"
 Dynamic: license-file
 
 # Real-Time Visual Defect Detection
@@ -149,3 +160,128 @@ pytest -q -p no:cacheprovider
 ## License
 
 Apache-2.0 (see `LICENSE`).
+
+## Docker Compose (Development and Benchmarking)
+
+The repository includes `docker-compose.yml` with three services:
+
+- `dev`: interactive development shell with the project mounted.
+- `benchmark`: runs the pipeline and prints execution time.
+- `test`: runs the test suite (useful locally and in CI).
+
+All services mount the local `data/` directory into the container at `/workspace/data`.
+
+### Prerequisites
+
+- Docker Desktop (or Docker Engine + Compose) installed on your machine.
+
+### Development Shell
+
+```powershell
+docker compose run --rm dev
+```
+
+This installs the project in editable mode inside the container and opens a shell in `/workspace`.
+
+### Benchmark / Pipeline Run
+
+Run with defaults (uses the default config path from the compose file):
+
+```powershell
+docker compose run --rm benchmark
+```
+
+Run with a custom config and dataset path:
+
+```powershell
+$env:PIPELINE_CONFIG = "src/real_time_visual_defect_detection/config/default.yaml"
+$env:PIPELINE_DATASET_PATH = "data/raw/sample.zip"
+docker compose run --rm benchmark
+```
+
+Optional environment variables supported by `benchmark`:
+
+- `PIPELINE_CONFIG`: config file path passed to `--config`
+- `PIPELINE_DATASET_PATH`: optional override for `--dataset-path`
+- `PIPELINE_EXTRACT_DIR`: optional override for `--extract-dir`
+- `PIPELINE_EXTRA_ARGS`: extra CLI flags (for example `--choose-dataset`)
+
+Example with extra args:
+
+```powershell
+$env:PIPELINE_EXTRA_ARGS = "--choose-dataset"
+docker compose run --rm benchmark
+```
+
+### Tests / CI
+
+Run the default test command used by this repository:
+
+```powershell
+docker compose run --rm test
+```
+
+Override the pytest command arguments (for example, a single test file):
+
+```powershell
+$env:PYTEST_ARGS = "tests/test_loader.py -q -p no:cacheprovider"
+docker compose run --rm test
+```
+
+For CI, the same service can be used in your pipeline runner:
+
+```powershell
+docker compose run --rm test
+```
+
+## Dockerfile (Multi-Stage Image)
+
+The repository also includes a multi-stage `Dockerfile` (Python 3.11) that installs dependencies with:
+
+```text
+pip install -e .
+```
+
+The image exposes two mount points:
+
+- `/data` for datasets, extracted files, and run outputs
+- `/config` for custom config files (mount a YAML/JSON file here and set `PIPELINE_CONFIG`)
+
+### Build (CPU default)
+
+```powershell
+docker build -t real-time-visual-defect-detection:cpu .
+```
+
+### Run (CPU example with mounted data and config)
+
+```powershell
+docker run --rm `
+  --mount type=bind,source="${PWD}\data",target=/data `
+  --mount type=bind,source="${PWD}\src\real_time_visual_defect_detection\config\default.yaml",target=/config/pipeline.yaml,readonly `
+  -e PIPELINE_CONFIG=/config/pipeline.yaml `
+  real-time-visual-defect-detection:cpu `
+  --dataset-path /data/raw/sample.zip `
+  --extract-dir /data/raw/extracted
+```
+
+Notes:
+
+- Extra CLI args are appended after the image name and are passed to `scripts/main.py`.
+- Inside the container, use Linux paths (`/data/...`, `/config/...`).
+
+### Build (GPU-ready PyTorch wheels via build arg)
+
+To build an image that installs PyTorch CUDA wheels (for compatible GPU hosts):
+
+```powershell
+docker build -t real-time-visual-defect-detection:gpu `
+  --build-arg ENABLE_CUDA=1 `
+  --build-arg TORCH_CUDA_WHL_INDEX=https://download.pytorch.org/whl/cu124 `
+  .
+```
+
+GPU runtime requirements (host):
+
+- NVIDIA GPU drivers installed
+- NVIDIA Container Toolkit configured for Docker

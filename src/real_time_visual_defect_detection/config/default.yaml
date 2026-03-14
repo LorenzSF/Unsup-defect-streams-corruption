@@ -4,10 +4,31 @@ run:
   run_name: "baseline"
 
 dataset:
-  source_type: "zip"          # "zip" or "folder"
-  path: "data/raw/sample.zip" # set to your local ZIP path or pass --dataset-path
+  source_type: "folder"
+  path: "data/raw/extracted"
   extract_dir: "data/raw/extracted"
   image_glob: "**/*.png"      # also supports jpg/jpeg if you change code
+
+  # --- Stream composition + train/test split ---
+  split:
+    # Composition controls: simulate the real-world mix arriving from a camera.
+    # null means "use all available samples of that class".
+    max_good: null          # maximum normal (label=0) samples to include
+    max_bad: null           # maximum anomalous (label=1) samples to include
+    max_unlabeled: null     # maximum unlabeled (label=-1) samples to include
+    # Alternative to max_bad: express defect rate as a fraction of good count.
+    # Takes precedence over max_bad when set.
+    # Example: 0.05 keeps bad = 5 % of the selected good samples.
+    bad_fraction: null
+
+    # Train / test partition
+    test_ratio: 0.2         # fraction of each class held out for evaluation
+    stratify: true          # maintain class proportions across train and test
+    # If true, the train set contains only normal (label=0) and unlabeled
+    # (label=-1) images — appropriate for unsupervised / one-class models.
+    # All anomalous samples are routed exclusively to the test set.
+    train_on_good_only: true
+    seed: null              # null = inherit run.seed
 
 preprocessing:
   resize:
@@ -27,8 +48,15 @@ corruption:
     scale: 0.5                # for resolution reduction
 
 model:
-  name: "dummy_distance"      # start with dummy; later implement AE/patch/embedding
+  name: "rd4ad"               # "dummy_distance" | "rd4ad"
   threshold: 0.5              # used for binary decision (normal/anomalous)
+
+  rd4ad:
+    image_size: 256
+    epochs: 1
+    learning_rate: 0.005
+    batch_size: 16
+    checkpoint_path: "data/checkpoints/rd4ad.pth"
 
 evaluation:
   metrics: ["precision", "recall", "f1", "accuracy"]

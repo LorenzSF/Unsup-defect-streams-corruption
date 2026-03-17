@@ -281,6 +281,7 @@ class SplitResult:
     """
 
     train: List[LabeledSample]
+    val: List[LabeledSample]
     test: List[LabeledSample]
 
 
@@ -346,13 +347,14 @@ def apply_dataset_split(
     Returns
     -------
     SplitResult
-        Named pair of ``(train, test)`` sample lists.
+        Named trio of ``(train, val, test)`` sample lists.
     """
     seed_val = split_cfg.get("seed")
     seed = int(seed_val) if seed_val is not None else fallback_seed
     rng = random.Random(seed)
 
     test_ratio = float(split_cfg.get("test_ratio", 0.2))
+    val_ratio = float(split_cfg.get("val_ratio", 0.1))
     stratify = bool(split_cfg.get("stratify", True))
     train_on_good_only = bool(split_cfg.get("train_on_good_only", True))
 
@@ -398,8 +400,21 @@ def apply_dataset_split(
         all_samples = good + bad + unlabeled
         train, test = _split_group(all_samples, test_ratio, rng)
 
-    # Final shuffle so train/test are not class-ordered.
+    # Optional validation holdout taken from the train split.
+    val: List[LabeledSample] = []
+    if val_ratio > 0.0 and len(train) > 0:
+        if stratify:
+            tr_good, va_good = _split_group([s for s in train if s.label == 0], val_ratio, rng)
+            tr_bad, va_bad = _split_group([s for s in train if s.label == 1], val_ratio, rng)
+            tr_unl, va_unl = _split_group([s for s in train if s.label == -1], val_ratio, rng)
+            train = tr_good + tr_bad + tr_unl
+            val = va_good + va_bad + va_unl
+        else:
+            train, val = _split_group(train, val_ratio, rng)
+
+    # Final shuffle so splits are not class-ordered.
     rng.shuffle(train)
+    rng.shuffle(val)
     rng.shuffle(test)
 
-    return SplitResult(train=train, test=test)
+    return SplitResult(train=train, val=val, test=test)

@@ -2,9 +2,13 @@ numpy
 pyyaml
 opencv-python
 scikit-learn
+scipy
+pillow
 torch
 torchvision
-anomalib<2.0,>=1.0
+anomalib<3.0,>=2.2
+lightning<3.0,>=2.4
+transformers<5.0,>=4.44
 psutil
 plotly
 pandas

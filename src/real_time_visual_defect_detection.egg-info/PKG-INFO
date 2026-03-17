@@ -9,9 +9,13 @@ Requires-Dist: numpy
 Requires-Dist: pyyaml
 Requires-Dist: opencv-python
 Requires-Dist: scikit-learn
+Requires-Dist: scipy
+Requires-Dist: pillow
 Requires-Dist: torch
 Requires-Dist: torchvision
-Requires-Dist: anomalib<2.0,>=1.0
+Requires-Dist: anomalib<3.0,>=2.2
+Requires-Dist: lightning<3.0,>=2.4
+Requires-Dist: transformers<5.0,>=4.44
 Requires-Dist: psutil
 Requires-Dist: plotly
 Requires-Dist: pandas
@@ -24,61 +28,63 @@ Dynamic: license-file
 
 # Real-Time Visual Defect Detection
 
-
 ## Project Goals
 
-- Build a reproducible baseline for visual anomaly detection.
-- Run controlled robustness experiments with synthetic corruptions.
+- Build a reproducible visual anomaly detection benchmark pipeline.
+- Compare multiple models under the same data split and corruption settings.
+- Keep CPU/GPU execution explicit and reproducible (including NVIDIA devices).
 
+## Current Models
 
-## Principal Pipeline Flow
+- `dummy_distance`
+- `rd4ad`
+- `anomalib_patchcore`
+- `subspacead` (DINOv2 + PCA residual scoring)
 
-The main execution path is implemented in `scripts/main.py` and `src/real_time_visual_defect_detection/pipelines/run_pipeline.py`.
+## Pipeline Flow
 
-1. Load config (`yaml` or `json`) from `--config`.
-2. Resolve dataset source.
-3. If `source_type: zip`, safely extract ZIP, then recursively discover images.
-4. If `source_type: folder`, recursively discover images directly in the folder.
-5. For each image, run read -> optional resize -> optional corruption -> normalize -> model predict.
-6. Save run artifacts:
-7. `config_snapshot.json` (exact config used).
-8. `predictions.json` (per-image results).
+`scripts/main.py` calls `run_pipeline()` in `src/real_time_visual_defect_detection/pipelines/run_pipeline.py`.
 
-Flow summary:
-
-```text
-config -> dataset resolve -> preprocess -> optional corruption -> model predict -> save outputs
-```
+1. Load YAML/JSON config.
+2. Resolve dataset from folder or ZIP.
+3. Build train/val/test split.
+4. Resolve runtime/device (`auto`, `cpu`, `cuda`, `cuda:<id>`).
+5. Fit on train, optionally calibrate threshold on val, evaluate on test.
+6. Save per-model predictions and benchmark summary.
 
 ## Repository Structure
 
 ```text
 .
-|-- scripts/
-|   `-- main.py                         # CLI entrypoint
+|-- scripts/main.py
 |-- src/real_time_visual_defect_detection/
-|   |-- config/default.yaml             # Default experiment config
-|   |-- core.py                         # Config loading utilities
-|   |-- pipelines/run_pipeline.py       # End-to-end run loop
-|   |-- io/                             # Dataset loading + zip extraction
-|   |-- preprocessing/                  # Standard transforms + corruption
-|   |-- models/                         # Baseline + future model implementations
-|   |-- evaluation/                     # Metrics and robustness helpers
-|   `-- explainability/                 # Explainability module (placeholder)
-|-- tests/                              # Unit tests
-|-- data/                               # Local datasets, extracted data, run outputs
-|-- pyproject.toml                      # Project metadata and dependencies
-`-- README.md
+|   |-- config/default.yaml
+|   |-- pipelines/run_pipeline.py
+|   |-- models/
+|   |   |-- registry.py
+|   |   |-- anomalib_adapter.py
+|   |   |-- subspacead_model.py
+|   |   `-- rd4ad/
+|   |-- io/
+|   |-- preprocessing/
+|   |-- evaluation/
+|   `-- visualization/
+|-- tests/
+|-- Dockerfile
+|-- docker-compose.yml
+`-- pyproject.toml
 ```
 
 ## Requirements
 
 - Python `>=3.11,<3.12`
-- OS dependencies for `opencv-python` (platform-specific)
+- PyTorch + torchvision
+- Anomalib `>=2.2,<3.0`
+- Transformers (for SubspaceAD)
 
 ## Installation
 
-### Option A: `pip`
+### Option A: pip
 
 ```powershell
 python -m venv .venv
@@ -86,47 +92,59 @@ python -m venv .venv
 pip install -e .
 ```
 
-### Option B: `uv`
+### Option B: uv
 
 ```powershell
 uv sync
 ```
 
-## Run the Pipeline
-
-Basic run:
-
-```powershell
-$env:PYTHONPATH='src'
-python scripts/main.py --config src/real_time_visual_defect_detection/config/default.yaml --dataset-path "C:\path\to\dataset.zip"
-```
-
-Interactive dataset selection (uses path history in `data/.dataset_path_history.json`):
-
-```powershell
-$env:PYTHONPATH='src'
-python scripts/main.py --config src/real_time_visual_defect_detection/config/default.yaml --choose-dataset
-```
-
-Notes:
-
-- If dataset source is a folder, set `dataset.source_type: "folder"` in config.
-- If source is zip, keep `dataset.source_type: "zip"` and provide zip path.
-
 ## Configuration Overview
 
-Default config is at `src/real_time_visual_defect_detection/config/default.yaml`.
+Default config: `src/real_time_visual_defect_detection/config/default.yaml`
 
-- `run`: seed, run name, and output directory.
-- `dataset`: source type (`zip`/`folder`), input path, extraction directory.
-- `preprocessing`: resize and normalization settings.
-- `corruption`: enable/disable and parameters for corruption type.
-- `model`: model name and anomaly threshold.
-- `evaluation`: metric names (defined for future integration).
+- `run`: seed/output/run name
+- `runtime`: device, precision, workers, CUDA tuning
+- `dataset`: source + split policy
+- `dataset.split`: includes `test_ratio` and `val_ratio`
+- `preprocessing`: resize + normalization
+- `corruption`: synthetic corruption controls
+- `model`: single-model mode, with `thresholding` policy
+- `benchmark.models`: multi-model benchmark mode
+
+## Run the Pipeline
+
+Interactive launcher (single command):
+
+```powershell
+$env:PYTHONPATH='src'
+python scripts/main.py
+```
+
+The launcher will prompt for:
+
+- dataset path (config/history/detected candidates)
+- model name (from registry: `dummy_distance`, `rd4ad`, `anomalib_patchcore`, `subspacead`)
+- press `Q` in menus to exit immediately
+
+Direct (non-interactive) run:
+
+```powershell
+$env:PYTHONPATH='src'
+python scripts/main.py --config src/real_time_visual_defect_detection/config/default.yaml --dataset-path "C:\path\to\dataset" --model anomalib_patchcore --no-interactive
+```
+
+Before the run starts, the launcher performs model-specific dependency preflight checks.
+
+Interactive dataset selection:
+
+```powershell
+$env:PYTHONPATH='src'
+python scripts/main.py --choose-dataset --choose-model
+```
 
 ## Outputs
 
-Each run writes to:
+Each run creates:
 
 ```text
 data/runs/<run_name>_<UTC_YYYYMMDD_HHMMSS>/
@@ -135,21 +153,52 @@ data/runs/<run_name>_<UTC_YYYYMMDD_HHMMSS>/
 Artifacts:
 
 - `config_snapshot.json`
-- `predictions.json`
+- `runtime_info.json`
+- `validation_predictions_<model>.json`
+- `predictions_<model>.json`
+- `predictions.json` (single-model compatibility)
+- `benchmark_summary.json`
+- `benchmark_summary.csv`
+- `plots/embedding_umap_<model>.html` (if embeddings are available)
 
-Prediction row format:
+## NVIDIA / GPU Usage
 
-```json
-{
-  "path": "...",
-  "score": 0.73,
-  "pred_is_anomaly": 1
-}
+Set runtime in config:
+
+```yaml
+runtime:
+  device: "cuda"
+```
+
+The run writes `runtime_info.json` with:
+
+- CUDA availability
+- selected device
+- GPU name
+- torch/cuda versions
+
+If `runtime.device` is `cuda` and CUDA is unavailable, the run fails fast.
+
+## Docker Compose
+
+Available services:
+
+- `dev`
+- `benchmark` (CPU/default)
+- `benchmark-gpu` (requires NVIDIA runtime)
+- `gpu-smoke` (quick CUDA check inside container)
+- `test`
+
+Examples:
+
+```powershell
+docker compose run --rm benchmark
+docker compose --profile bench-gpu run --rm gpu-smoke
+docker compose --profile bench-gpu run --rm benchmark-gpu
+docker compose run --rm test
 ```
 
 ## Testing
-
-Run tests from project root:
 
 ```powershell
 $env:PYTHONDONTWRITEBYTECODE='1'
@@ -160,128 +209,3 @@ pytest -q -p no:cacheprovider
 ## License
 
 Apache-2.0 (see `LICENSE`).
-
-## Docker Compose (Development and Benchmarking)
-
-The repository includes `docker-compose.yml` with three services:
-
-- `dev`: interactive development shell with the project mounted.
-- `benchmark`: runs the pipeline and prints execution time.
-- `test`: runs the test suite (useful locally and in CI).
-
-All services mount the local `data/` directory into the container at `/workspace/data`.
-
-### Prerequisites
-
-- Docker Desktop (or Docker Engine + Compose) installed on your machine.
-
-### Development Shell
-
-```powershell
-docker compose run --rm dev
-```
-
-This installs the project in editable mode inside the container and opens a shell in `/workspace`.
-
-### Benchmark / Pipeline Run
-
-Run with defaults (uses the default config path from the compose file):
-
-```powershell
-docker compose run --rm benchmark
-```
-
-Run with a custom config and dataset path:
-
-```powershell
-$env:PIPELINE_CONFIG = "src/real_time_visual_defect_detection/config/default.yaml"
-$env:PIPELINE_DATASET_PATH = "data/raw/sample.zip"
-docker compose run --rm benchmark
-```
-
-Optional environment variables supported by `benchmark`:
-
-- `PIPELINE_CONFIG`: config file path passed to `--config`
-- `PIPELINE_DATASET_PATH`: optional override for `--dataset-path`
-- `PIPELINE_EXTRACT_DIR`: optional override for `--extract-dir`
-- `PIPELINE_EXTRA_ARGS`: extra CLI flags (for example `--choose-dataset`)
-
-Example with extra args:
-
-```powershell
-$env:PIPELINE_EXTRA_ARGS = "--choose-dataset"
-docker compose run --rm benchmark
-```
-
-### Tests / CI
-
-Run the default test command used by this repository:
-
-```powershell
-docker compose run --rm test
-```
-
-Override the pytest command arguments (for example, a single test file):
-
-```powershell
-$env:PYTEST_ARGS = "tests/test_loader.py -q -p no:cacheprovider"
-docker compose run --rm test
-```
-
-For CI, the same service can be used in your pipeline runner:
-
-```powershell
-docker compose run --rm test
-```
-
-## Dockerfile (Multi-Stage Image)
-
-The repository also includes a multi-stage `Dockerfile` (Python 3.11) that installs dependencies with:
-
-```text
-pip install -e .
-```
-
-The image exposes two mount points:
-
-- `/data` for datasets, extracted files, and run outputs
-- `/config` for custom config files (mount a YAML/JSON file here and set `PIPELINE_CONFIG`)
-
-### Build (CPU default)
-
-```powershell
-docker build -t real-time-visual-defect-detection:cpu .
-```
-
-### Run (CPU example with mounted data and config)
-
-```powershell
-docker run --rm `
-  --mount type=bind,source="${PWD}\data",target=/data `
-  --mount type=bind,source="${PWD}\src\real_time_visual_defect_detection\config\default.yaml",target=/config/pipeline.yaml,readonly `
-  -e PIPELINE_CONFIG=/config/pipeline.yaml `
-  real-time-visual-defect-detection:cpu `
-  --dataset-path /data/raw/sample.zip `
-  --extract-dir /data/raw/extracted
-```
-
-Notes:
-
-- Extra CLI args are appended after the image name and are passed to `scripts/main.py`.
-- Inside the container, use Linux paths (`/data/...`, `/config/...`).
-
-### Build (GPU-ready PyTorch wheels via build arg)
-
-To build an image that installs PyTorch CUDA wheels (for compatible GPU hosts):
-
-```powershell
-docker build -t real-time-visual-defect-detection:gpu `
-  --build-arg ENABLE_CUDA=1 `
-  --build-arg TORCH_CUDA_WHL_INDEX=https://download.pytorch.org/whl/cu124 `
-  .
-```
-
-GPU runtime requirements (host):
-
-- NVIDIA GPU drivers installed
-- NVIDIA Container Toolkit configured for Docker

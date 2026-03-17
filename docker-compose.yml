@@ -48,6 +48,51 @@ services:
       echo "Running: $${cmd}";
       eval "$${cmd}"
 
+  benchmark-gpu:
+    <<: *app-common
+    profiles: ["bench-gpu"]
+    gpus: all
+    environment:
+      PYTHONPATH: /workspace/src
+      PYTHONDONTWRITEBYTECODE: "1"
+      PIPELINE_CONFIG: ${PIPELINE_CONFIG:-src/real_time_visual_defect_detection/config/default.yaml}
+      PIPELINE_DATASET_PATH: ${PIPELINE_DATASET_PATH:-}
+      PIPELINE_EXTRACT_DIR: ${PIPELINE_EXTRACT_DIR:-}
+      PIPELINE_EXTRA_ARGS: ${PIPELINE_EXTRA_ARGS:-}
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+    command: >
+      set -eu;
+      python -m pip install --upgrade pip;
+      pip install -e .;
+      cmd='time python scripts/main.py --config "$${PIPELINE_CONFIG}"';
+      if [ -n "$${PIPELINE_DATASET_PATH}" ]; then
+        cmd="$${cmd} --dataset-path \"$${PIPELINE_DATASET_PATH}\"";
+      fi;
+      if [ -n "$${PIPELINE_EXTRACT_DIR}" ]; then
+        cmd="$${cmd} --extract-dir \"$${PIPELINE_EXTRACT_DIR}\"";
+      fi;
+      if [ -n "$${PIPELINE_EXTRA_ARGS}" ]; then
+        cmd="$${cmd} $${PIPELINE_EXTRA_ARGS}";
+      fi;
+      echo "Running: $${cmd}";
+      eval "$${cmd}"
+
+  gpu-smoke:
+    <<: *app-common
+    profiles: ["bench-gpu"]
+    gpus: all
+    environment:
+      PYTHONPATH: /workspace/src
+      PYTHONDONTWRITEBYTECODE: "1"
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+    command: >
+      set -eu;
+      python -m pip install --upgrade pip;
+      pip install -e .;
+      python -c "import torch; print({'cuda_available': torch.cuda.is_available(), 'cuda_version': torch.version.cuda, 'gpu_count': torch.cuda.device_count()})"
+
   test:
     <<: *app-common
     profiles: ["test", "ci"]

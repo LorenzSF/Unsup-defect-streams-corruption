@@ -14,10 +14,13 @@ src/real_time_visual_defect_detection/evaluation/robustness.py
 src/real_time_visual_defect_detection/explainability/heatmaps.py
 src/real_time_visual_defect_detection/io/dataset_loader.py
 src/real_time_visual_defect_detection/io/zip_ingest.py
+src/real_time_visual_defect_detection/models/anomalib_adapter.py
 src/real_time_visual_defect_detection/models/autoencoder.py
 src/real_time_visual_defect_detection/models/base.py
 src/real_time_visual_defect_detection/models/embedding_distance.py
 src/real_time_visual_defect_detection/models/patch_detector.py
+src/real_time_visual_defect_detection/models/registry.py
+src/real_time_visual_defect_detection/models/subspacead_model.py
 src/real_time_visual_defect_detection/models/rd4ad/__init__.py
 src/real_time_visual_defect_detection/models/rd4ad/dataset.py
 src/real_time_visual_defect_detection/models/rd4ad/de_resnet.py
@@ -35,3 +38,5 @@ src/real_time_visual_defect_detection/visualization/plots.py
 tests/test_corruption.py
 tests/test_loader.py
 tests/test_metrics.py
+tests/test_pipeline_benchmark.py
+tests/test_registry.py

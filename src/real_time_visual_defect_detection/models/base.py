@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 
@@ -14,7 +14,11 @@ class ModelOutput:
 
 
 class BaseModel:
-    def fit(self, train_paths: List[Path]) -> None:
+    def fit(
+        self,
+        train_paths: List[Path],
+        fit_context: Optional[Dict[str, Any]] = None,
+    ) -> None:
         """Train the model on *train_paths*.
 
         Default implementation is a no-op for models that require no

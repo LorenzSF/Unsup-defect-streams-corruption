@@ -3,32 +3,29 @@ run:
   output_dir: "data/runs"
   run_name: "baseline"
 
+runtime:
+  device: "auto"               # auto | cpu | cuda | cuda:0
+  precision: "fp32"            # fp32 | fp16 | bf16 (model-dependent)
+  num_workers: 0
+  pin_memory: true
+  cudnn_benchmark: true
+
 dataset:
   source_type: "folder"
   path: "data/raw/extracted"
   extract_dir: "data/raw/extracted"
-  image_glob: "**/*.png"      # also supports jpg/jpeg if you change code
+  image_glob: "**/*.png"
 
-  # --- Stream composition + train/test split ---
   split:
-    # Composition controls: simulate the real-world mix arriving from a camera.
-    # null means "use all available samples of that class".
-    max_good: null          # maximum normal (label=0) samples to include
-    max_bad: null           # maximum anomalous (label=1) samples to include
-    max_unlabeled: null     # maximum unlabeled (label=-1) samples to include
-    # Alternative to max_bad: express defect rate as a fraction of good count.
-    # Takes precedence over max_bad when set.
-    # Example: 0.05 keeps bad = 5 % of the selected good samples.
+    max_good: null
+    max_bad: null
+    max_unlabeled: null
     bad_fraction: null
-
-    # Train / test partition
-    test_ratio: 0.2         # fraction of each class held out for evaluation
-    stratify: true          # maintain class proportions across train and test
-    # If true, the train set contains only normal (label=0) and unlabeled
-    # (label=-1) images — appropriate for unsupervised / one-class models.
-    # All anomalous samples are routed exclusively to the test set.
+    test_ratio: 0.2
+    val_ratio: 0.1
+    stratify: true
     train_on_good_only: true
-    seed: null              # null = inherit run.seed
+    seed: null
 
 preprocessing:
   resize:
@@ -37,19 +34,23 @@ preprocessing:
     height: 256
   normalize:
     enabled: true
-    mode: "0_1"               # "0_1" or "imagenet" (we implement 0_1 now)
+    mode: "0_1"
 
 corruption:
   enabled: false
-  type: "gaussian_noise"      # "gaussian_noise" | "gaussian_blur" | "resolution_reduction"
+  type: "gaussian_noise"      # gaussian_noise | gaussian_blur | resolution_reduction
   params:
-    sigma: 10.0               # for noise
-    ksize: 5                  # for blur (odd)
-    scale: 0.5                # for resolution reduction
+    sigma: 10.0
+    ksize: 5
+    scale: 0.5
 
+# Single-model mode (used when benchmark.models is omitted).
 model:
-  name: "rd4ad"               # "dummy_distance" | "rd4ad"
-  threshold: 0.5              # used for binary decision (normal/anomalous)
+  name: "dummy_distance"
+  threshold: 0.5
+  thresholding:
+    mode: "fixed"             # fixed | val_f1 | val_quantile
+    target_fpr: 0.01
 
   rd4ad:
     image_size: 256
@@ -58,5 +59,69 @@ model:
     batch_size: 16
     checkpoint_path: "data/checkpoints/rd4ad.pth"
 
+  anomalib:
+    image_size: 256
+    batch_size: 8
+    pre_trained: false
+    backbone: "wide_resnet50_2"
+    layers: ["layer2", "layer3"]
+    coreset_sampling_ratio: 0.1
+    num_neighbors: 9
+    n_features: null
+
+  stfpm:
+    backbone: "resnet18"
+    layers: ["layer1", "layer2", "layer3"]
+    epochs: 1
+    learning_rate: 0.4
+
+  csflow:
+    epochs: 1
+    learning_rate: 0.0002
+    cross_conv_hidden_channels: 1024
+    n_coupling_blocks: 4
+    clamp: 3
+
+  draem:
+    epochs: 1
+    learning_rate: 0.0001
+    beta: [0.2, 1.0]
+
+  subspacead:
+    model_ckpt: "facebook/dinov2-with-registers-large"
+    image_size: 256
+    batch_size: 4
+    pca_ev: 0.99
+    pca_dim: null
+    img_score_agg: "mtop1p"
+    layers: [-12, -13, -14, -15, -16, -17, -18]
+
+benchmark:
+  save_umap: true
+  models:
+    - name: "dummy_distance"
+      threshold: 0.5
+    # - name: "rd4ad"
+    #   threshold: 0.5
+    #   rd4ad:
+    #     epochs: 1
+    # - name: "anomalib_patchcore"
+    #   threshold: 0.5
+    #   thresholding:
+    #     mode: "val_quantile"
+    #     target_fpr: 0.01
+    #   anomalib:
+    #     pre_trained: false
+    # - name: "anomalib_padim"
+    #   threshold: 0.5
+    # - name: "anomalib_stfpm"
+    #   threshold: 0.5
+    # - name: "anomalib_csflow"
+    #   threshold: 0.5
+    # - name: "anomalib_draem"
+    #   threshold: 0.5
+    # - name: "subspacead"
+    #   threshold: 0.5
+
 evaluation:
-  metrics: ["precision", "recall", "f1", "accuracy"]
+  metrics: ["precision", "recall", "f1", "accuracy", "auroc", "aupr"]

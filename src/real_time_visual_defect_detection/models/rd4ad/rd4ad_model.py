@@ -1,7 +1,7 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 import torch
@@ -57,6 +57,8 @@ class RD4ADModel(BaseModel):
         Anomaly score threshold for the binary is_anomaly decision.
     checkpoint_path:
         Where to save/load the trained bn+decoder weights.
+    device:
+        Torch device string (for example ``cpu`` or ``cuda:0``).
     """
 
     _IMAGENET_MEAN = [0.485, 0.456, 0.406]
@@ -69,6 +71,7 @@ class RD4ADModel(BaseModel):
         learning_rate: float = 0.005,
         batch_size: int = 16,
         threshold: float = 0.5,
+        device: str = "cpu",
         checkpoint_path: str = "data/checkpoints/rd4ad.pth",
     ) -> None:
         self.image_size = image_size
@@ -77,7 +80,7 @@ class RD4ADModel(BaseModel):
         self.batch_size = batch_size
         self.threshold = threshold
         self.checkpoint_path = Path(checkpoint_path)
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.device = device
 
         self._transform = T.Compose([
             T.Resize((image_size, image_size)),
@@ -132,7 +135,11 @@ class RD4ADModel(BaseModel):
     # Public interface
     # ------------------------------------------------------------------
 
-    def fit(self, train_paths: List[Path]) -> None:
+    def fit(
+        self,
+        train_paths: List[Path],
+        fit_context: Optional[Dict[str, Any]] = None,
+    ) -> None:
         """Train bn + decoder on *train_paths* (normal images).
 
         The encoder (wide_resnet50_2, ImageNet pretrained) stays frozen.
@@ -224,7 +231,7 @@ class RD4ADModel(BaseModel):
     def get_embedding(self, x: np.ndarray) -> Optional[np.ndarray]:
         """Return a 1-D feature embedding derived from the BN bottleneck.
 
-        Runs the encoder and BN layer, then applies global average pooling
+        # Global average pool -> (C,)
         to produce a compact, fixed-length vector that summarises the image
         representation learned by the model.
 
@@ -253,6 +260,6 @@ class RD4ADModel(BaseModel):
             inputs = self.encoder(tensor)
             bn_out = self.bn(inputs)          # (1, C, H, W)
 
-        # Global average pool → (C,)
+        # Global average pool -> (C,)
         embedding = bn_out.mean(dim=[2, 3]).squeeze(0).cpu().numpy().astype(np.float32)
         return embedding

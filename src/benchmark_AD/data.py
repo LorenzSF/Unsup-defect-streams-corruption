@@ -1,13 +1,15 @@
 from __future__ import annotations
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 import json
 import math
 import random
-from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+import zipfile
 
-from .zip_ingest import extract_zip
+import cv2
+import numpy as np
 
 
 SUPPORTED_EXTS = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"}
@@ -19,6 +21,10 @@ _LABEL_JSON_NAMES = {
     "ground_truth.json",
     "metadata.json",
 }
+
+_BAD_DIR_NAMES = ("bad", "defects", "defective", "anomaly", "anomalous")
+_JSON_PATH_KEYS = ("path", "file", "filename", "image", "name")
+_JSON_LABEL_KEYS = ("label", "class", "category", "is_anomaly", "split")
 
 
 # ---------------------------------------------------------------------------
@@ -51,17 +57,28 @@ class LabeledSample:
 # Existing flat-list helpers (unchanged — backward compatible)
 # ---------------------------------------------------------------------------
 
+def _iter_image_paths(root_dir: Path, recursive: bool = True) -> Iterator[Path]:
+    """Yield sorted image files under *root_dir*."""
+    walker = root_dir.rglob("*") if recursive else root_dir.iterdir()
+    # Scan entries in deterministic order and keep supported image files only.
+    for p in sorted(walker):
+        if p.is_file() and p.suffix.lower() in SUPPORTED_EXTS:
+            yield p
+
+
+def _resolve_source_root(source_type: str, path: str, extract_dir: str) -> Path:
+    if source_type == "zip":
+        return extract_zip(path, extract_dir)
+    if source_type == "folder":
+        return Path(path)
+    raise ValueError(f"Unknown source_type: {source_type}. Use 'zip' or 'folder'.")
+
 def list_images(root_dir: str | Path) -> List[Path]:
     root_dir = Path(root_dir)
     if not root_dir.exists():
         raise FileNotFoundError(f"Dataset directory not found: {root_dir}")
 
-    paths = []
-    for p in root_dir.rglob("*"):
-        if p.is_file() and p.suffix.lower() in SUPPORTED_EXTS:
-            paths.append(p)
-
-    return sorted(paths)
+    return list(_iter_image_paths(root_dir))
 
 
 def resolve_dataset(source_type: str, path: str, extract_dir: str) -> List[Path]:
@@ -70,14 +87,7 @@ def resolve_dataset(source_type: str, path: str, extract_dir: str) -> List[Path]
     - source_type="zip": extracts zip to extract_dir then lists images
     - source_type="folder": lists images under path
     """
-    if source_type == "zip":
-        extracted = extract_zip(path, extract_dir)
-        return list_images(extracted)
-
-    if source_type == "folder":
-        return list_images(path)
-
-    raise ValueError(f"Unknown source_type: {source_type}. Use 'zip' or 'folder'.")
+    return list_images(_resolve_source_root(source_type, path, extract_dir))
 
 
 # ---------------------------------------------------------------------------
@@ -104,8 +114,8 @@ def _load_label_json(json_path: Path) -> Dict[str, int]:
 
     Supported formats
     -----------------
-    * Dict  ``{"img.png": 0, "img2.png": "bad", …}``
-    * List  ``[{"path": "img.png", "label": 1}, …]``
+    * Dict  ``{"img.png": 0, "img2.png": "bad",}``
+    * List  ``[{"path": "img.png", "label": 1},]``
 
     Keys are matched by *filename only* (basename), so callers need not
     worry about directory prefixes inside the JSON.
@@ -114,17 +124,17 @@ def _load_label_json(json_path: Path) -> Dict[str, int]:
     result: Dict[str, int] = {}
 
     if isinstance(data, dict):
+        # Convert mapping entries to a basename -> normalized-label table.
         for k, v in data.items():
             result[Path(k).name] = _parse_label_value(v)
 
     elif isinstance(data, list):
-        path_keys = ("path", "file", "filename", "image", "name")
-        label_keys = ("label", "class", "category", "is_anomaly", "split")
+        # Read record-style entries and extract path/label fields when available.
         for item in data:
             if not isinstance(item, dict):
                 continue
-            path_key = next((k for k in path_keys if k in item), None)
-            label_key = next((k for k in label_keys if k in item), None)
+            path_key = next((k for k in _JSON_PATH_KEYS if k in item), None)
+            label_key = next((k for k in _JSON_LABEL_KEYS if k in item), None)
             if path_key and label_key:
                 result[Path(item[path_key]).name] = _parse_label_value(item[label_key])
 
@@ -139,12 +149,13 @@ def _find_label_json(root_dir: Path) -> Optional[Path]:
     2. The single ``.json`` file present at root level (if exactly one
        exists), as a last-resort heuristic.
     """
+    # Check known label-file names first.
     for name in _LABEL_JSON_NAMES:
         candidate = root_dir / name
         if candidate.is_file():
             return candidate
 
-    # Heuristic: exactly one JSON at root level → treat it as labels file.
+    # Heuristic: exactly one JSON at root level -> treat it as labels file.
     json_files = [
         p for p in root_dir.iterdir()
         if p.is_file() and p.suffix.lower() == ".json"
@@ -164,14 +175,14 @@ def list_labeled_images(root_dir: str | Path) -> List[LabeledSample]:
 
     Detection priority
     ------------------
-    1. **JSON label file** — if a recognised label file exists at
+    1. **JSON label file** if a recognised label file exists at
        *root_dir* (see :func:`_find_label_json`), every discovered image
        is matched by filename; unmatched images get label ``-1``.
-    2. **good / bad subdirectories** — if ``good/`` or ``bad/``
+    2. **good / bad subdirectories** if ``good/`` or ``bad/``
        subdirectories are present, images are labelled accordingly.
        Sub-folders inside ``bad/`` (e.g. ``bad/scratch/``) are captured
        as ``defect_type``.
-    3. **Flat fallback** — all images are returned with label ``-1``
+    3. **Flat fallback** all images are returned with label ``-1``
        (unlabeled), reusing :func:`list_images`.
     """
     root_dir = Path(root_dir)
@@ -181,25 +192,21 @@ def list_labeled_images(root_dir: str | Path) -> List[LabeledSample]:
     samples: List[LabeledSample] = []
 
     # ------------------------------------------------------------------
-    # Priority 1 — JSON label file
+    # Priority 1: JSON label file
     # ------------------------------------------------------------------
     label_json = _find_label_json(root_dir)
     if label_json is not None:
         label_map = _load_label_json(label_json)
-        for p in sorted(root_dir.rglob("*")):
-            if p.is_file() and p.suffix.lower() in SUPPORTED_EXTS:
-                samples.append(
-                    LabeledSample(path=p, label=label_map.get(p.name, -1))
-                )
+        # Match each discovered image with its JSON label by filename.
+        for p in _iter_image_paths(root_dir):
+            samples.append(LabeledSample(path=p, label=label_map.get(p.name, -1)))
         if samples:
             return samples
 
     # ------------------------------------------------------------------
-    # Priority 2 — good/ bad/ subdirectory convention
+    # Priority 2: good/ bad/ subdirectory convention
     # Recognised names for the defect folder (checked in order).
     # ------------------------------------------------------------------
-    _BAD_DIR_NAMES = ("bad", "defects", "defective", "anomaly", "anomalous")
-
     good_dir = root_dir / "good"
     bad_dir = next(
         (root_dir / name for name in _BAD_DIR_NAMES if (root_dir / name).is_dir()),
@@ -210,31 +217,29 @@ def list_labeled_images(root_dir: str | Path) -> List[LabeledSample]:
 
     if has_good or has_bad:
         if has_good:
-            for p in sorted(good_dir.rglob("*")):
-                if p.is_file() and p.suffix.lower() in SUPPORTED_EXTS:
-                    samples.append(LabeledSample(path=p, label=0, defect_type=None))
+            # Collect all normal images from the good directory.
+            for p in _iter_image_paths(good_dir):
+                samples.append(LabeledSample(path=p, label=0, defect_type=None))
 
         if has_bad:
             # Images directly in bad/ (no defect sub-category)
-            for p in sorted(bad_dir.iterdir()):
-                if p.is_file() and p.suffix.lower() in SUPPORTED_EXTS:
-                    samples.append(LabeledSample(path=p, label=1, defect_type=None))
+            for p in _iter_image_paths(bad_dir, recursive=False):
+                samples.append(LabeledSample(path=p, label=1, defect_type=None))
 
             # Sub-folders inside bad/ represent defect categories
             for subdir in sorted(d for d in bad_dir.iterdir() if d.is_dir()):
                 defect_type = subdir.name
-                for p in sorted(subdir.rglob("*")):
-                    if p.is_file() and p.suffix.lower() in SUPPORTED_EXTS:
-                        samples.append(
-                            LabeledSample(path=p, label=1, defect_type=defect_type)
-                        )
+                # Collect all defect images for the current category folder.
+                for p in _iter_image_paths(subdir):
+                    samples.append(LabeledSample(path=p, label=1, defect_type=defect_type))
 
         return samples
 
     # ------------------------------------------------------------------
-    # Priority 3 — flat fallback (unlabeled)
+    # Priority 3 : flat fallback (unlabeled)
     # ------------------------------------------------------------------
-    for p in list_images(root_dir):
+    # Return every image as unlabeled when no labeling source is available.
+    for p in _iter_image_paths(root_dir):
         samples.append(LabeledSample(path=p, label=-1, defect_type=None))
 
     return samples
@@ -250,14 +255,7 @@ def resolve_dataset_labeled(
     Returns a list of :class:`LabeledSample` objects instead of plain
     paths.  The extraction logic is identical to the original function.
     """
-    if source_type == "zip":
-        extracted = extract_zip(path, extract_dir)
-        return list_labeled_images(extracted)
-
-    if source_type == "folder":
-        return list_labeled_images(path)
-
-    raise ValueError(f"Unknown source_type: {source_type}. Use 'zip' or 'folder'.")
+    return list_labeled_images(_resolve_source_root(source_type, path, extract_dir))
 
 
 # ---------------------------------------------------------------------------
@@ -275,7 +273,7 @@ class SplitResult:
         is ``True`` this contains only label-0 and label-(-1) entries.
     test:
         Samples intended for evaluation / validation.  Always contains
-        the labeled samples (label ∈ {0, 1}) so that metrics can be
+        the labeled samples (label in {0, 1}) so that metrics can be
         computed.  May also contain a portion of unlabeled samples when
         ``train_on_good_only`` is ``False``.
     """
@@ -310,6 +308,32 @@ def _split_group(
     return out[n_test:], out[:n_test]
 
 
+def _partition_by_label(
+    samples: List[LabeledSample],
+) -> Tuple[List[LabeledSample], List[LabeledSample], List[LabeledSample]]:
+    """Split samples into (good, bad, unlabeled) lists."""
+    good = [s for s in samples if s.label == 0]
+    bad = [s for s in samples if s.label == 1]
+    unlabeled = [s for s in samples if s.label == -1]
+    return good, bad, unlabeled
+
+
+def _split_stratified_groups(
+    good: List[LabeledSample],
+    bad: List[LabeledSample],
+    unlabeled: List[LabeledSample],
+    ratio: float,
+    rng: random.Random,
+) -> Tuple[List[LabeledSample], List[LabeledSample]]:
+    """Split each label group independently and merge back."""
+    train_good, test_good = _split_group(good, ratio, rng)
+    train_bad, test_bad = _split_group(bad, ratio, rng)
+    train_unlabeled, test_unlabeled = _split_group(unlabeled, ratio, rng)
+    train = train_good + train_bad + train_unlabeled
+    test = test_good + test_bad + test_unlabeled
+    return train, test
+
+
 def apply_dataset_split(
     samples: List[LabeledSample],
     split_cfg: Dict[str, Any],
@@ -326,20 +350,20 @@ def apply_dataset_split(
         The ``dataset.split`` configuration dictionary.  All keys are
         optional and fall back to sensible defaults when absent.
 
-        * ``max_good`` *(int | null)* – cap on label-0 samples.
-        * ``max_bad`` *(int | null)* – cap on label-1 samples.
-        * ``max_unlabeled`` *(int | null)* – cap on label-(-1) samples.
-        * ``bad_fraction`` *(float | null)* – if set, keeps
+        * ``max_good`` *(int | null)* cap on label-0 samples.
+        * ``max_bad`` *(int | null)* cap on label-1 samples.
+        * ``max_unlabeled`` *(int | null)* cap on label-(-1) samples.
+        * ``bad_fraction`` *(float | null)* if set, keeps
           ``bad = ceil(n_good * bad_fraction)`` samples, overriding
           ``max_bad``.
-        * ``test_ratio`` *(float)* – fraction of each group held out
+        * ``test_ratio`` *(float)*  fraction of each group held out
           for evaluation (default ``0.2``).
-        * ``stratify`` *(bool)* – split each label group independently
+        * ``stratify`` *(bool)*  split each label group independently
           so class proportions are maintained (default ``True``).
-        * ``train_on_good_only`` *(bool)* – when ``True``, all bad
+        * ``train_on_good_only`` *(bool)*  when ``True``, all bad
           samples are routed to the test set (suitable for one-class /
           unsupervised anomaly detection models, default ``True``).
-        * ``seed`` *(int | null)* – RNG seed; falls back to
+        * ``seed`` *(int | null)*  RNG seed; falls back to
           *fallback_seed* when absent or ``None``.
     fallback_seed:
         Seed used when ``split_cfg`` does not specify one.
@@ -359,9 +383,7 @@ def apply_dataset_split(
     train_on_good_only = bool(split_cfg.get("train_on_good_only", True))
 
     # --- Separate by group ------------------------------------------------
-    good: List[LabeledSample] = [s for s in samples if s.label == 0]
-    bad: List[LabeledSample] = [s for s in samples if s.label == 1]
-    unlabeled: List[LabeledSample] = [s for s in samples if s.label == -1]
+    good, bad, unlabeled = _partition_by_label(samples)
 
     # --- Apply composition caps -------------------------------------------
     max_good = split_cfg.get("max_good")
@@ -383,18 +405,14 @@ def apply_dataset_split(
 
     # --- Train / test partition -------------------------------------------
     if train_on_good_only:
-        # Bad samples go entirely into test — no train leakage of anomalies.
+        # Bad samples go entirely into test no train leakage of anomalies.
         train_good, test_good = _split_group(good, test_ratio, rng)
         train_unlabeled, test_unlabeled = _split_group(unlabeled, test_ratio, rng)
         train = train_good + train_unlabeled
         test = test_good + test_unlabeled + bad
     elif stratify:
         # Stratified: split each class group independently.
-        train_good, test_good = _split_group(good, test_ratio, rng)
-        train_bad, test_bad = _split_group(bad, test_ratio, rng)
-        train_unlabeled, test_unlabeled = _split_group(unlabeled, test_ratio, rng)
-        train = train_good + train_bad + train_unlabeled
-        test = test_good + test_bad + test_unlabeled
+        train, test = _split_stratified_groups(good, bad, unlabeled, test_ratio, rng)
     else:
         # Non-stratified: pool everything and split once.
         all_samples = good + bad + unlabeled
@@ -404,11 +422,8 @@ def apply_dataset_split(
     val: List[LabeledSample] = []
     if val_ratio > 0.0 and len(train) > 0:
         if stratify:
-            tr_good, va_good = _split_group([s for s in train if s.label == 0], val_ratio, rng)
-            tr_bad, va_bad = _split_group([s for s in train if s.label == 1], val_ratio, rng)
-            tr_unl, va_unl = _split_group([s for s in train if s.label == -1], val_ratio, rng)
-            train = tr_good + tr_bad + tr_unl
-            val = va_good + va_bad + va_unl
+            tr_good, tr_bad, tr_unl = _partition_by_label(train)
+            train, val = _split_stratified_groups(tr_good, tr_bad, tr_unl, val_ratio, rng)
         else:
             train, val = _split_group(train, val_ratio, rng)
 
@@ -418,3 +433,72 @@ def apply_dataset_split(
     rng.shuffle(test)
 
     return SplitResult(train=train, val=val, test=test)
+
+
+def _validate_zip_member(member_name: str, extract_dir: Path) -> None:
+    member_path = Path(member_name)
+    if member_path.is_absolute():
+        raise ValueError(f"Unsafe ZIP member (absolute path): {member_name}")
+
+    resolved_target = (extract_dir / member_path).resolve()
+    try:
+        resolved_target.relative_to(extract_dir)
+    except ValueError as exc:
+        raise ValueError(f"Unsafe ZIP member (path traversal): {member_name}") from exc
+
+
+def extract_zip(zip_path: str | Path, extract_dir: str | Path) -> Path:
+    zip_path = Path(zip_path)
+    if not zip_path.exists():
+        raise FileNotFoundError(f"Zip not found: {zip_path}")
+
+    extract_dir = Path(extract_dir).resolve()
+    extract_dir.mkdir(parents=True, exist_ok=True)
+
+    with zipfile.ZipFile(zip_path, "r") as zf:
+        # Validate each archive member before extraction.
+        for info in zf.infolist():
+            _validate_zip_member(info.filename, extract_dir)
+        zf.extractall(extract_dir)
+
+    return extract_dir
+
+
+def apply_corruption(img: np.ndarray, corruption_type: str, params: Dict[str, Any]) -> np.ndarray:
+    if corruption_type == "gaussian_noise":
+        sigma = float(params.get("sigma", 10.0))
+        noise = np.random.normal(0.0, sigma, img.shape).astype(np.float32)
+        out = img.astype(np.float32) + noise
+        return np.clip(out, 0, 255).astype(img.dtype)
+
+    if corruption_type == "gaussian_blur":
+        ksize = int(params.get("ksize", 5))
+        if ksize % 2 == 0:
+            ksize += 1
+        return cv2.GaussianBlur(img, (ksize, ksize), 0)
+
+    if corruption_type == "resolution_reduction":
+        scale = float(params.get("scale", 0.5))
+        h, w = img.shape[:2]
+        new_w = max(1, int(w * scale))
+        new_h = max(1, int(h * scale))
+        small = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_AREA)
+        return cv2.resize(small, (w, h), interpolation=cv2.INTER_LINEAR)
+
+    raise ValueError(f"Unknown corruption_type: {corruption_type}")
+
+
+def read_image_bgr(path: str) -> np.ndarray:
+    img = cv2.imread(path, cv2.IMREAD_COLOR)
+    if img is None:
+        raise ValueError(f"Failed to read image: {path}")
+    return img
+
+
+def resize(img: np.ndarray, size: Tuple[int, int]) -> np.ndarray:
+    w, h = size
+    return cv2.resize(img, (w, h), interpolation=cv2.INTER_AREA)
+
+
+def normalize_0_1(img: np.ndarray) -> np.ndarray:
+    return img.astype(np.float32) / 255.0

@@ -1,20 +1,185 @@
+from __future__ import annotations
+def placeholder():
+    return None
+
+
+from dataclasses import dataclass
+from typing import Dict
+
+import numpy as np
+from sklearn.metrics import (
+    accuracy_score,
+    average_precision_score,
+    f1_score,
+    precision_score,
+    recall_score,
+    roc_auc_score,
+)
+
+
+@dataclass
+class MetricsResult:
+    precision: float
+    recall: float
+    f1: float
+    accuracy: float
+
+
+def compute_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> MetricsResult:
+    return MetricsResult(
+        precision=float(precision_score(y_true, y_pred, zero_division=0)),
+        recall=float(recall_score(y_true, y_pred, zero_division=0)),
+        f1=float(f1_score(y_true, y_pred, zero_division=0)),
+        accuracy=float(accuracy_score(y_true, y_pred)),
+    )
+
+
+def compute_binary_metrics(
+    y_true: np.ndarray,
+    y_pred: np.ndarray,
+    y_score: np.ndarray,
+) -> Dict[str, float]:
+    """Compute image-level binary metrics, including threshold-free scores."""
+    if y_true.size == 0:
+        return {
+            "precision": 0.0,
+            "recall": 0.0,
+            "f1": 0.0,
+            "accuracy": 0.0,
+            "auroc": 0.0,
+            "aupr": 0.0,
+        }
+
+    metrics = {
+        "precision": float(precision_score(y_true, y_pred, zero_division=0)),
+        "recall": float(recall_score(y_true, y_pred, zero_division=0)),
+        "f1": float(f1_score(y_true, y_pred, zero_division=0)),
+        "accuracy": float(accuracy_score(y_true, y_pred)),
+    }
+    if len(np.unique(y_true)) >= 2:
+        metrics["auroc"] = float(roc_auc_score(y_true, y_score))
+        metrics["aupr"] = float(average_precision_score(y_true, y_score))
+    else:
+        metrics["auroc"] = 0.0
+        metrics["aupr"] = 0.0
+    return metrics
+
+def placeholder():
+    return None
+
+"""Interactive Plotly Dash dashboard for exploring pipeline run results.
+
+This module exposes two public callables:
+
+* :func:`build_app` — constructs and returns a configured ``Dash`` application
+  instance without starting a server, useful for testing or embedding.
+* :func:`run_dashboard` — convenience wrapper that calls :func:`build_app` and
+  launches the development server on a configurable host / port.
+
+Dashboard layout
+----------------
+The dashboard is organised into three sections:
+
+1. **Run selector** — dropdown populated from the ``data/runs/`` directory that
+   lets the user switch between multiple saved pipeline runs without restarting
+   the server.  Selecting a run reloads all charts from the corresponding
+   ``predictions.json`` and ``config_snapshot.json``.
+
+2. **Summary panel** — key-metric cards showing total samples, precision,
+   recall, F1, accuracy, and AUROC for the selected run.
+
+3. **Chart tabs** — tabbed area containing the four plots from
+   :mod:`~benchmark_AD.evaluation`:
+
+   * Score Distribution
+   * ROC Curve
+   * Confusion Matrix
+   * Scores by Defect Type
+
+Typical usage
+-------------
+::
+
+
+    run_dashboard(runs_dir="data/runs", host="127.0.0.1", port=8050, debug=True)
+"""
+
+
+from pathlib import Path
+from typing import Optional
+
+
+def build_app(
+    runs_dir: str | Path = "data/runs",
+    default_run: Optional[str] = None,
+):
+    """Construct and return the Dash application instance.
+
+    Reads available runs from *runs_dir*, sets up the layout (run selector,
+    summary cards, chart tabs), and registers all Dash callbacks for
+    interactivity.  The server is **not** started; call ``app.run(...)`` or
+    use :func:`run_dashboard` to launch it.
+
+    Parameters
+    ----------
+    runs_dir:
+        Directory that contains timestamped run subdirectories produced by
+        :func:`~benchmark_AD.pipeline.run_pipeline`.
+        Each subdirectory must contain ``predictions.json`` and
+        ``config_snapshot.json``.
+    default_run:
+        Name of the run subdirectory to load on startup.  When ``None`` the
+        most recently modified run is selected automatically.
+
+    Returns
+    -------
+    dash.Dash
+        Fully configured Dash application instance ready to serve.
+    """
+    raise NotImplementedError
+
+
+def run_dashboard(
+    runs_dir: str | Path = "data/runs",
+    host: str = "127.0.0.1",
+    port: int = 8050,
+    debug: bool = False,
+    default_run: Optional[str] = None,
+) -> None:
+    """Build the Dash app and start the development server.
+
+    Convenience wrapper around :func:`build_app` that immediately launches the
+    browser-accessible server.  Blocks until the server process is terminated
+    (e.g. with Ctrl-C).
+
+    Parameters
+    ----------
+    runs_dir:
+        Directory containing pipeline run outputs (see :func:`build_app`).
+    host:
+        Network interface to bind.  Use ``"0.0.0.0"`` to expose the dashboard
+        on all interfaces (e.g. inside Docker).
+    port:
+        TCP port to listen on.
+    debug:
+        When ``True`` enables Dash hot-reloading and verbose error messages.
+        Keep ``False`` in production.
+    default_run:
+        Run subdirectory name to pre-select on load.  ``None`` picks the
+        latest run automatically.
+    """
+    raise NotImplementedError
+
 """Static chart generation for defect detection run results.
 
 This module provides functions that consume the ``predictions.json`` output
-produced by :func:`~real_time_visual_defect_detection.pipelines.run_pipeline.run_pipeline`
+produced by :func:`~benchmark_AD.pipeline.run_pipeline`
 and generate publication-ready figures using Plotly.
 
 Typical usage
 -------------
 ::
 
-    from real_time_visual_defect_detection.visualization.plots import (
-        plot_score_distribution,
-        plot_roc_curve,
-        plot_confusion_matrix,
-        plot_scores_by_defect_type,
-        plot_embedding_umap,
-    )
 
     records = json.loads(Path("data/runs/baseline_.../predictions.json").read_text())
 
@@ -22,7 +187,6 @@ Typical usage
     fig.write_html("score_dist.html")
 """
 
-from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
@@ -237,3 +401,4 @@ def plot_embedding_umap(
     )
 
     return fig
+

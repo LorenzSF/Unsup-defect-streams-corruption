@@ -46,7 +46,7 @@ corruption:
 
 # Single-model mode (used when benchmark.models is omitted).
 model:
-  name: "dummy_distance"
+  name: "rd4ad"
   threshold: 0.5
   thresholding:
     mode: "fixed"             # fixed | val_f1 | val_quantile
@@ -99,10 +99,8 @@ model:
 benchmark:
   save_umap: true
   models:
-    - name: "dummy_distance"
+    - name: "rd4ad"
       threshold: 0.5
-    # - name: "rd4ad"
-    #   threshold: 0.5
     #   rd4ad:
     #     epochs: 1
     # - name: "anomalib_patchcore"

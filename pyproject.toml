@@ -1,5 +1,5 @@
 [project]
-name = "real-time-visual-defect-detection"
+name = "benchmark_AD"
 version = "0.1.0"
 description = "Thesis pipeline: real-time visual defect detection with robustness evaluation"
 readme = "README.md"

@@ -1,5 +1,31 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
+from typing import Any, Dict
+
+import yaml
+
+
+def load_config(path: str | Path) -> Dict[str, Any]:
+    """Load a JSON or YAML config file into a dictionary."""
+    path = Path(path)
+    if not path.exists():
+        raise FileNotFoundError(f"Config file not found: {path}")
+
+    suffix = path.suffix.lower()
+    with path.open("r", encoding="utf-8") as f:
+        if suffix == ".json":
+            cfg = json.load(f)
+        else:
+            cfg = yaml.safe_load(f)
+
+    if not isinstance(cfg, dict):
+        raise ValueError(f"Config must be a dictionary-like object: {path}")
+
+    return cfg
+
+
 import csv
 import json
 import sys
@@ -13,14 +39,14 @@ import torch
 from sklearn.metrics import precision_recall_curve
 from tqdm.auto import tqdm
 
-from real_time_visual_defect_detection.evaluation.metrics import compute_binary_metrics
-from real_time_visual_defect_detection.io.dataset_loader import (
+from benchmark_AD.evaluation import compute_binary_metrics
+from benchmark_AD.data import (
     apply_dataset_split,
     resolve_dataset_labeled,
 )
-from real_time_visual_defect_detection.models.registry import available_models, build_model
-from real_time_visual_defect_detection.preprocessing.corruption import apply_corruption
-from real_time_visual_defect_detection.preprocessing.standard import (
+from benchmark_AD.models import available_models, build_model
+from benchmark_AD.data import apply_corruption
+from benchmark_AD.data import (
     normalize_0_1,
     read_image_bgr,
     resize,
@@ -117,7 +143,7 @@ def _save_umap(
     scores: List[float],
     defect_types: List[Optional[str]],
 ) -> None:
-    from real_time_visual_defect_detection.visualization.plots import plot_embedding_umap
+    from benchmark_AD.evaluation import plot_embedding_umap
 
     matrix = np.stack(embeddings, axis=0)
     fig = plot_embedding_umap(

@@ -7,13 +7,13 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-from real_time_visual_defect_detection.core import load_config
-from real_time_visual_defect_detection.models.registry import available_models
-from real_time_visual_defect_detection.pipelines.run_pipeline import run_pipeline
+from benchmark_AD.pipeline import load_config
+from benchmark_AD.models import available_models, model_dependencies
+from benchmark_AD.pipeline import run_pipeline
 
 
 DEFAULT_HISTORY_FILE = Path("data") / ".dataset_path_history.json"
-DEFAULT_CONFIG_FILE = Path("src") / "real_time_visual_defect_detection" / "config" / "default.yaml"
+DEFAULT_CONFIG_FILE = Path("src") / "benchmark_AD" / "config" / "default.yaml"
 MAX_HISTORY_ENTRIES = 10
 _IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff")
 
@@ -215,30 +215,7 @@ def _current_model_name(cfg: Dict[str, object]) -> str | None:
 
 
 def _model_required_modules(model_name: str) -> List[str]:
-    anomalib_modules = {
-        "anomalib_patchcore": "anomalib.models.image.patchcore.torch_model",
-        "anomalib_padim": "anomalib.models.image.padim.torch_model",
-        "anomalib_stfpm": "anomalib.models.image.stfpm.torch_model",
-        "anomalib_csflow": "anomalib.models.image.csflow.torch_model",
-        "anomalib_draem": "anomalib.models.image.draem.torch_model",
-    }
-    if model_name in anomalib_modules:
-        required = [
-            "torch",
-            "torchvision",
-            "lightning.pytorch",
-            anomalib_modules[model_name],
-        ]
-        if model_name == "anomalib_csflow":
-            required.append("FrEIA")
-        if model_name == "anomalib_draem":
-            required.append("kornia")
-        return required
-    if model_name == "subspacead":
-        return ["torch", "transformers", "sklearn"]
-    if model_name == "rd4ad":
-        return ["torch", "torchvision"]
-    return ["numpy"]
+    return list(model_dependencies(model_name))
 
 
 def _install_hint(module_name: str) -> str:
@@ -247,6 +224,10 @@ def _install_hint(module_name: str) -> str:
         "lightning.pytorch": "lightning",
         "anomalib": "anomalib",
         "sklearn": "scikit-learn",
+        "cv2": "opencv-python",
+        "FrEIA": "FrEIA",
+        "kornia": "kornia",
+        "transformers": "transformers",
     }
     return hints.get(module_name, module_name.split(".", 1)[0])
 

@@ -1,22 +1,18 @@
 from __future__ import annotations
-
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 import numpy as np
-
-from real_time_visual_defect_detection.io.dataset_loader import LabeledSample
-from real_time_visual_defect_detection.preprocessing.standard import (
-    read_image_bgr,
-    resize,
-    normalize_0_1,
-)
-from real_time_visual_defect_detection.preprocessing.corruption import apply_corruption
+import cv2
+import json
+import math
+import random
+import zipfile
 
 
 # ---------------------------------------------------------------------------
-# Legacy simulator — yields plain Path objects (backward compatible)
+# Legacy simulator - yields plain Path objects (backward compatible)
 # ---------------------------------------------------------------------------
 
 @dataclass
@@ -50,11 +46,11 @@ class StreamFrame:
     Attributes
     ----------
     image:
-        Pixel data as a ``float32`` NumPy array in ``[0, 1]`` (H × W × C,
+        Pixel data as a ``float32`` NumPy array in ``[0, 1]`` (H Ã— W Ã— C,
         BGR channel order).  Shape depends on whether a resize was
         requested.
     label:
-        Ground-truth class from the source :class:`~real_time_visual_defect_detection.io.dataset_loader.LabeledSample`:
+        Ground-truth class from the source :class:`~benchmark_AD.data.LabeledSample`:
         ``0`` = good, ``1`` = anomalous, ``-1`` = unknown / unlabeled.
     path:
         Original file path on disk.
@@ -69,10 +65,6 @@ class StreamFrame:
     defect_type: Optional[str] = field(default=None)
 
 
-# ---------------------------------------------------------------------------
-# Image-loading simulator
-# ---------------------------------------------------------------------------
-
 @dataclass
 class ImageStreamSimulator:
     """Stream images from a list of labeled samples, loading lazily at
@@ -82,9 +74,9 @@ class ImageStreamSimulator:
     Parameters
     ----------
     samples:
-        Ordered list of :class:`~real_time_visual_defect_detection.io.dataset_loader.LabeledSample`
-        objects (from :func:`~real_time_visual_defect_detection.io.dataset_loader.list_labeled_images`
-        or :func:`~real_time_visual_defect_detection.io.dataset_loader.resolve_dataset_labeled`).
+        Ordered list of :class:`~benchmark_AD.data.LabeledSample`
+        objects (from :func:`~benchmark_AD.data.list_labeled_images`
+        or :func:`~benchmark_AD.data.resolve_dataset_labeled`).
     resize_wh:
         ``(width, height)`` tuple.  When provided each frame is resized
         before being yielded.  ``None`` skips resizing.
@@ -95,7 +87,7 @@ class ImageStreamSimulator:
         Optional dict with ``type`` and ``params`` keys (matching the
         ``corruption`` section of the pipeline config).  When provided
         the corruption is applied **after** resize and **before**
-        normalization — exactly the order used in :func:`~real_time_visual_defect_detection.pipelines.run_pipeline.run_pipeline`.
+        normalization - exactly the order used in :func:`~benchmark_AD.pipeline.run_pipeline`.
     limit:
         Stop after emitting this many frames.  ``None`` iterates the
         full ``samples`` list.
@@ -170,7 +162,7 @@ class ImageStreamSimulator:
             Labeled samples to stream.
         cfg:
             Full pipeline config dict as returned by
-            :func:`~real_time_visual_defect_detection.core.load_config`.
+            :func:`~benchmark_AD.pipeline.load_config`.
         limit:
             Optional frame cap (overrides any limit in the config).
         skip_errors:
@@ -198,3 +190,4 @@ class ImageStreamSimulator:
             limit=limit,
             skip_errors=skip_errors,
         )
+

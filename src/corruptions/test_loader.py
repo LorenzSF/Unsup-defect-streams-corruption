@@ -1,4 +1,4 @@
-from real_time_visual_defect_detection.io.dataset_loader import resolve_dataset
+from benchmark_AD.data import resolve_dataset
 
 
 def test_resolve_dataset_invalid_type():

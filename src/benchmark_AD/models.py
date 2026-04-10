@@ -11,6 +11,7 @@ import numpy as np
 class ModelOutput:
     score: float
     is_anomaly: bool
+    heatmap: Optional[np.ndarray] = None
 
 
 class BaseModel:
@@ -71,6 +72,35 @@ def _as_float(value: Any, default: float) -> float:
     if arr.size == 0:
         return default
     return float(arr.reshape(-1)[0])
+
+
+def _as_heatmap(value: Any) -> Optional[np.ndarray]:
+    if value is None:
+        return None
+    if torch.is_tensor(value):
+        arr = value.detach().float().cpu().numpy()
+    else:
+        arr = np.asarray(value, dtype=np.float32)
+    if arr.size == 0:
+        return None
+
+    if arr.ndim == 4:
+        arr = arr[0]
+    if arr.ndim == 3 and arr.shape[0] == 1:
+        arr = arr[0]
+    if arr.ndim == 3 and arr.shape[-1] == 1:
+        arr = arr[..., 0]
+    if arr.ndim != 2:
+        return None
+
+    arr = arr.astype(np.float32)
+    min_val = float(np.min(arr))
+    max_val = float(np.max(arr))
+    if max_val > min_val:
+        arr = (arr - min_val) / (max_val - min_val)
+    else:
+        arr = np.zeros_like(arr, dtype=np.float32)
+    return arr
 
 
 class AnomalibAdapter(BaseModel):
@@ -178,8 +208,9 @@ class AnomalibAdapter(BaseModel):
             pred = self._model(tensor)
 
         score = _as_float(getattr(pred, "pred_score", None), default=0.0)
+        heatmap = _as_heatmap(getattr(pred, "anomaly_map", None))
         is_anomaly = score >= self.threshold
-        return ModelOutput(score=score, is_anomaly=is_anomaly)
+        return ModelOutput(score=score, is_anomaly=is_anomaly, heatmap=heatmap)
 
 
 import torch
@@ -631,7 +662,7 @@ class RD4ADModel(BaseModel):
             score = 0.5
 
         is_anomaly = score >= self.threshold
-        return ModelOutput(score=score, is_anomaly=is_anomaly)
+        return ModelOutput(score=score, is_anomaly=is_anomaly, heatmap=None)
 
 
 class SubspaceADModel(BaseModel):
@@ -763,7 +794,11 @@ class SubspaceADModel(BaseModel):
         )
 
         score = self._aggregate_score(score_map)
-        return ModelOutput(score=score, is_anomaly=score >= self.threshold)
+        return ModelOutput(
+            score=score,
+            is_anomaly=score >= self.threshold,
+            heatmap=_as_heatmap(score_map),
+        )
 
     def get_embedding(self, x: np.ndarray) -> Optional[np.ndarray]:
         if self._model is None or self._processor is None:

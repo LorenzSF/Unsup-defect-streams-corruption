@@ -13,7 +13,7 @@ from benchmark_AD.pipeline import run_pipeline
 
 
 DEFAULT_HISTORY_FILE = Path("data") / ".dataset_path_history.json"
-DEFAULT_CONFIG_FILE = Path("src") / "benchmark_AD" / "config" / "default.yaml"
+DEFAULT_CONFIG_FILE = Path("src") / "benchmark_AD" / "default.yaml"
 MAX_HISTORY_ENTRIES = 10
 _IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff")
 

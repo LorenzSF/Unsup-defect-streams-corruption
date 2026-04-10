@@ -40,7 +40,7 @@ package-dir = {"" = "src"}
 where = ["src"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["tests", "src/corruptions"]
 
 # ---------------------------------------------------------------------------
 # uv-specific: route torch/torchvision to the PyTorch CUDA 12.4 wheel index

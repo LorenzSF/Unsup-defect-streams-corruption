@@ -60,6 +60,10 @@ echo
 
 cd "${REPO_DIR}"
 export PYTHONPATH="${REPO_DIR}/src:${PYTHONPATH:-}"
+# Force unbuffered Python stdout/stderr so progress is visible through `tee`
+# (otherwise long-running stages like DRAEM training can stay silent for minutes
+# while output sits in the 4 KB pipe buffer).
+export PYTHONUNBUFFERED=1
 
 for category in "${cat_list[@]}"; do
   marker="${RESULTS_DIR}/${MODEL}__${category}.done"

@@ -63,10 +63,12 @@ model:
 
   rd4ad:
     image_size: 256
+    batch_size: 16
+    backbone: "wide_resnet50_2"
+    layers: ["layer1", "layer2", "layer3"]
     epochs: 1
     learning_rate: 0.005
-    batch_size: 16
-    checkpoint_path: "data/checkpoints/rd4ad.pth"
+    anomaly_map_mode: "multiply"
 
   anomalib:
     image_size: 256

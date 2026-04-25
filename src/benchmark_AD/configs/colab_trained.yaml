@@ -70,10 +70,12 @@ model:
     learning_rate: 0.0001
     beta: [0.2, 1.0]
 
-  # RD4AD (Deng & Li 2022). Paper trains 200 epochs.
+  # RD4AD (Deng & Li 2022). Paper trains 200 epochs with Adam(lr=0.005, betas=(0.5, 0.999)).
   rd4ad:
     image_size: 256
+    batch_size: 16
+    backbone: "wide_resnet50_2"
+    layers: ["layer1", "layer2", "layer3"]
     epochs: 200
     learning_rate: 0.005
-    batch_size: 16
-    checkpoint_path: "data/checkpoints/rd4ad.pth"
+    anomaly_map_mode: "multiply"

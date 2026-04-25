@@ -597,72 +597,100 @@ def _topk_mean(arr: np.ndarray, frac: float = 0.01) -> float:
     return float(np.mean(flat[idx]))
 
 
-class RD4ADModel(BaseModel):
-    """RD4AD model - a deep learning anomaly detection model."""
+class AnomalibRd4adModel(AnomalibAdapter):
+    """Pipeline wrapper for anomalib Reverse Distillation (RD4AD)."""
 
     def __init__(
         self,
-        image_size: int,
-        epochs: int,
-        learning_rate: float,
-        batch_size: int,
         threshold: float,
         device: str,
-        checkpoint_path: str,
+        image_size: int,
+        batch_size: int,
+        backbone: str,
+        layers: Sequence[str],
+        epochs: int,
+        learning_rate: float,
+        anomaly_map_mode: str = "multiply",
+        pre_trained: bool = True,
     ) -> None:
-        self.image_size = int(image_size)
+        super().__init__(
+            threshold=threshold,
+            device=device,
+            image_size=image_size,
+            batch_size=batch_size,
+            imagenet_normalize=True,
+        )
+        self.backbone = backbone
+        self.layers = list(layers)
         self.epochs = max(1, int(epochs))
         self.learning_rate = float(learning_rate)
-        self.batch_size = int(batch_size)
-        self.threshold = float(threshold)
-        self.device = device
-        self.checkpoint_path = checkpoint_path
-        self._model = None
-        self._is_fitted = False
-        self._load_checkpoint()
+        self.anomaly_map_mode = str(anomaly_map_mode)
+        self.pre_trained = bool(pre_trained)
 
-    def _load_checkpoint(self) -> None:
-        """Load model from checkpoint if it exists."""
+    def _import_rd4ad_components(self):
         try:
-            checkpoint = torch.load(self.checkpoint_path, map_location=self.device)
-            if isinstance(checkpoint, dict) and "model_state" in checkpoint:
-                # Checkpoint is a dict with model state
-                self._model = checkpoint.get("state_dict", checkpoint.get("model"))
-            else:
-                # Checkpoint might be a model directly or state dict
-                self._model = checkpoint
-            self._is_fitted = True
-        except (FileNotFoundError, RuntimeError, KeyError):
-            # If checkpoint doesn't exist, model will be trained
-            pass
+            from anomalib.models.image.reverse_distillation.torch_model import (
+                ReverseDistillationModel,
+            )
+            from anomalib.models.image.reverse_distillation.loss import (
+                ReverseDistillationLoss,
+            )
+            from anomalib.models.image.reverse_distillation.anomaly_map import (
+                AnomalyMapGenerationMode,
+            )
+        except ModuleNotFoundError as exc:  # pragma: no cover
+            self._raise_missing_dependency(exc, "RD4AD")
+        except Exception as exc:  # pragma: no cover
+            raise RuntimeError(
+                "RD4AD adapter requires anomalib>=2.2 with reverse_distillation modules available."
+            ) from exc
+        return ReverseDistillationModel, ReverseDistillationLoss, AnomalyMapGenerationMode
 
-    def fit(
-        self,
-        train_paths: list[Path],
-        fit_context: Optional[Dict[str, Any]] = None,
-    ) -> None:
-        """Fit the model. Model is pre-trained via checkpoint."""
+    def fit(self, train_paths, fit_context=None) -> None:
         if len(train_paths) == 0:
-            raise ValueError("RD4ADModel requires at least one training image.")
-        # Model comes pre-trained from checkpoint
+            raise ValueError("AnomalibRd4adModel requires at least one training image.")
+        fit_paths = self._fit_paths(train_paths=train_paths, fit_context=fit_context)
+
+        Rd4adModel, Rd4adLoss, AnomalyMapMode = self._import_rd4ad_components()
+        try:
+            mode = AnomalyMapMode(self.anomaly_map_mode)
+        except ValueError as exc:
+            valid = ", ".join(m.value for m in AnomalyMapMode)
+            raise ValueError(
+                f"Invalid anomaly_map_mode '{self.anomaly_map_mode}'. Expected one of: {valid}."
+            ) from exc
+
+        model = Rd4adModel(
+            backbone=self.backbone,
+            input_size=(self.image_size, self.image_size),
+            layers=self.layers,
+            anomaly_map_mode=mode,
+            pre_trained=self.pre_trained,
+        ).to(self.device)
+        loss_fn = Rd4adLoss()
+
+        # Encoder is the frozen teacher (forward() pins it to eval). Train only
+        # the bottleneck embedding + decoder, per Deng & Li 2022.
+        trainable = list(model.bottleneck.parameters()) + list(model.decoder.parameters())
+        optimizer = torch.optim.Adam(
+            trainable,
+            lr=self.learning_rate,
+            betas=(0.5, 0.999),
+        )
+
+        model.train()
+        for epoch in range(self.epochs):
+            desc = f"[anomalib_rd4ad] fit {epoch + 1}/{self.epochs}"
+            for batch in self._iter_training_batches(fit_paths, desc):
+                optimizer.zero_grad(set_to_none=True)
+                encoder_features, decoder_features = model(batch)
+                loss = loss_fn(encoder_features, decoder_features)
+                loss.backward()
+                optimizer.step()
+
+        model.eval()
+        self._model = model
         self._is_fitted = True
-
-    def predict(self, x: np.ndarray) -> ModelOutput:
-        """Predict anomaly score for image."""
-        if not self._is_fitted:
-            raise RuntimeError("RD4ADModel is not ready. Call fit() first or load checkpoint.")
-
-        # Simple scoring based on image statistics as fallback
-        # If a proper checkpoint is loaded, this would use the actual model
-        if self._model is None:
-            # Fallback: use image variance as anomaly score
-            score = float(np.var(x))
-        else:
-            # Would use actual model prediction here
-            score = 0.5
-
-        is_anomaly = score >= self.threshold
-        return ModelOutput(score=score, is_anomaly=is_anomaly, heatmap=None)
 
 
 class SubspaceADModel(BaseModel):
@@ -813,15 +841,19 @@ from typing import Any, Dict
 
 def _build_rd4ad(model_cfg: Dict[str, Any], runtime_cfg: Dict[str, Any]) -> BaseModel:
 
+    an_cfg = model_cfg.get("anomalib", {})
     rd_cfg = model_cfg.get("rd4ad", {})
-    return RD4ADModel(
-        image_size=int(rd_cfg.get("image_size", 256)),
-        epochs=int(rd_cfg.get("epochs", 200)),
-        learning_rate=float(rd_cfg.get("learning_rate", 0.005)),
-        batch_size=int(rd_cfg.get("batch_size", 16)),
+    return AnomalibRd4adModel(
         threshold=float(model_cfg.get("threshold", 0.5)),
         device=str(runtime_cfg.get("resolved_device", "cpu")),
-        checkpoint_path=str(rd_cfg.get("checkpoint_path", "data/checkpoints/rd4ad.pth")),
+        image_size=int(rd_cfg.get("image_size", an_cfg.get("image_size", 256))),
+        batch_size=int(rd_cfg.get("batch_size", an_cfg.get("batch_size", 16))),
+        backbone=str(rd_cfg.get("backbone", an_cfg.get("backbone", "wide_resnet50_2"))),
+        layers=rd_cfg.get("layers", an_cfg.get("layers", ["layer1", "layer2", "layer3"])),
+        epochs=int(rd_cfg.get("epochs", 200)),
+        learning_rate=float(rd_cfg.get("learning_rate", 0.005)),
+        anomaly_map_mode=str(rd_cfg.get("anomaly_map_mode", "multiply")),
+        pre_trained=bool(rd_cfg.get("pre_trained", an_cfg.get("pre_trained", True))),
     )
 
 
@@ -968,7 +1000,7 @@ def available_models() -> list[str]:
 
 # Model dependency mapping - specifies which Python packages each model requires
 _MODEL_DEPENDENCIES = {
-    "rd4ad": ("torch", "numpy"),
+    "rd4ad": ("anomalib", "torch", "numpy"),
     "anomalib_patchcore": ("anomalib", "torch", "numpy"),
     "anomalib_padim": ("anomalib", "torch", "numpy"),
     "anomalib_stfpm": ("anomalib", "torch", "numpy"),

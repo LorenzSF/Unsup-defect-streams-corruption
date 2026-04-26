@@ -1,0 +1,69 @@
+# Job A "val_defect" overlay — same 3 feature-based models as
+# colab_featurebased.yaml, but with thresholding.mode = "val_f1".
+# Pairs with the data.py patch that routes 10% of anomalies into val,
+# so val_f1 has both classes to fit the operating point on.
+
+_extends: ../default.yaml
+
+run:
+  run_name: "jobA_val_defect"
+  output_dir: "/content/work/runs"
+
+runtime:
+  device: "auto"
+  precision: "fp32"
+  num_workers: 2
+  pin_memory: true
+  cudnn_benchmark: true
+
+dataset:
+  source_type: "folder"
+  format: "real_iad"
+  # Overridden per-category by scripts/run_jobA_val_defect_colab.sh.
+  path: "/content/work/current"
+  extract_dir: "/content/work/current"
+  cameras: "C1"
+
+benchmark:
+  save_umap: false
+  models:
+    - name: "anomalib_patchcore"
+      threshold: 0.5
+      thresholding:
+        mode: "val_f1"
+        target_fpr: 0.01
+      anomalib:
+        image_size: 256
+        batch_size: 8
+        pre_trained: true
+        backbone: "wide_resnet50_2"
+        layers: ["layer2", "layer3"]
+        coreset_sampling_ratio: 0.1
+        num_neighbors: 9
+        n_features: null
+
+    - name: "anomalib_padim"
+      threshold: 0.5
+      thresholding:
+        mode: "val_f1"
+        target_fpr: 0.01
+      anomalib:
+        image_size: 256
+        batch_size: 16
+        pre_trained: true
+        backbone: "resnet18"
+        layers: ["layer1", "layer2", "layer3"]
+
+    - name: "subspacead"
+      threshold: 0.5
+      thresholding:
+        mode: "val_f1"
+        target_fpr: 0.01
+      subspacead:
+        model_ckpt: "facebook/dinov2-with-registers-large"
+        image_size: 256
+        batch_size: 4
+        pca_ev: 0.99
+        pca_dim: null
+        img_score_agg: "mtop1p"
+        layers: [-12, -13, -14, -15, -16, -17, -18]

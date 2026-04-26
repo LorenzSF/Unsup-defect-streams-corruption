@@ -3,3 +3,5 @@
 - [Real-IAD layout gotchas](reference_realiad_layout.md) — path depth, PNG masks, specimen grouping, zip structure.
 - [Intentional epochs=1 in default.yaml](project_default_epochs.md) — smoke-test config, not a bug.
 - [RD4AD adapter rewritten](project_rd4ad_stub.md) — was a variance-returning stub until 2026-04-25; now a real anomalib reverse_distillation wrapper. Pre-2026-04-25 rd4ad results are invalid.
+- [wICE / KU Leuven HPC setup](project_wice_setup.md) — paths, env vars, quotas for VSC OnDemand sessions. Full procedural guide at [docs/HPC_KU_LEUVEN_RUNBOOK.md](../docs/HPC_KU_LEUVEN_RUNBOOK.md).
+- [OnDemand terminal paste bug](feedback_ondemand_terminal.md) — heredocs and long pasted commands mangle; use sed/nano/short commands.

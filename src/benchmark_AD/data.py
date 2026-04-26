@@ -591,12 +591,18 @@ def apply_dataset_split(
         bad = _cap_and_shuffle(bad, int(max_bad) if max_bad is not None else None, rng)
 
     # --- Train / test partition -------------------------------------------
+    # Holdout of bad samples reserved for the validation split, used only in
+    # the train_on_good_only branch so threshold calibrators see both classes.
+    val_bad_holdout: List[LabeledSample] = []
     if train_on_good_only:
-        # Bad samples go entirely into test no train leakage of anomalies.
+        # Bad samples never enter train. A val_ratio slice goes into val so
+        # val_f1 / val_quantile have positives to work with; the rest goes
+        # to test. Train remains one-class.
         train_good, test_good = _split_group(good, test_ratio, rng)
         train_unlabeled, test_unlabeled = _split_group(unlabeled, test_ratio, rng)
+        test_bad, val_bad_holdout = _split_group(bad, val_ratio, rng)
         train = train_good + train_unlabeled
-        test = test_good + test_unlabeled + bad
+        test = test_good + test_unlabeled + test_bad
     elif stratify:
         # Stratified: split each class group independently.
         train, test = _split_stratified_groups(good, bad, unlabeled, test_ratio, rng)
@@ -613,6 +619,8 @@ def apply_dataset_split(
             train, val = _split_stratified_groups(tr_good, tr_bad, tr_unl, val_ratio, rng)
         else:
             train, val = _split_group(train, val_ratio, rng)
+
+    val.extend(val_bad_holdout)
 
     # Final shuffle so splits are not class-ordered.
     rng.shuffle(train)

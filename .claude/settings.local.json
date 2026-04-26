@@ -11,7 +11,11 @@
       "Bash(git -C \"c:/Users/Usuario/Desktop/Thesis/Pipeline/Real-time-visual-defect-detection\" log --oneline -20)",
       "Bash(git -C \"c:/Users/Usuario/Desktop/Thesis/Pipeline/Real-time-visual-defect-detection\" show --stat e640151)",
       "Bash(chmod +x /c/Users/Usuario/Desktop/Thesis/Pipeline/Real-time-visual-defect-detection/scripts/run_jobB_colab.sh)",
-      "Bash(python -c \"import anomalib; print\\('version:', anomalib.__version__\\); from anomalib.models.image.reverse_distillation import torch_model, loss; import inspect; print\\('--- ReverseDistillationModel signature ---'\\); print\\(inspect.signature\\(torch_model.ReverseDistillationModel.__init__\\)\\); print\\('--- module ---'\\); print\\(torch_model.__file__\\); print\\('--- attrs ---'\\); print\\([a for a in dir\\(torch_model.ReverseDistillationModel\\) if not a.startswith\\('_'\\)][:30]\\)\")"
+      "Bash(python -c \"import anomalib; print\\('version:', anomalib.__version__\\); from anomalib.models.image.reverse_distillation import torch_model, loss; import inspect; print\\('--- ReverseDistillationModel signature ---'\\); print\\(inspect.signature\\(torch_model.ReverseDistillationModel.__init__\\)\\); print\\('--- module ---'\\); print\\(torch_model.__file__\\); print\\('--- attrs ---'\\); print\\([a for a in dir\\(torch_model.ReverseDistillationModel\\) if not a.startswith\\('_'\\)][:30]\\)\")",
+      "Bash(python scripts/analyze_jobA.py)",
+      "Bash(PYTHONPATH=src python -m pytest src/corruptions/ -x -q)",
+      "Read(//c/Users/Usuario/Desktop/**)",
+      "Read(//c/Users/Usuario/Downloads/**)"
     ]
   }
 }

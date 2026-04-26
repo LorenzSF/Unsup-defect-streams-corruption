@@ -34,6 +34,14 @@ dataset:
     val_ratio: 0.1
     stratify: true
     train_on_good_only: true
+    # Industrial-calibration knobs — overlays (e.g. *_val_defect.yaml)
+    # opt in. "natural" keeps the legacy val_ratio slice; "equal" forces
+    # val to be 50/50 good/bad so the F1 calibrator is not biased by val
+    # prevalence. val_bad_balance_by_type stratifies the val bad pool
+    # by defect_type, capped at ceil(min_class * (1 + tolerance)).
+    val_balance: "natural"
+    val_bad_balance_by_type: false
+    val_balance_tolerance: 0.15
     seed: null
 
 preprocessing:

@@ -4,6 +4,10 @@
 > Every code change must serve one of the goals listed here.
 > Do not refactor outside task scope. Do not add new dependencies without asking first.
 > Prefer simple, readable code over clever abstractions.
+>
+> **Methodology decisions** (split rules, threshold calibration, metric
+> choices) live in [METHOD.md](METHOD.md). Update both files when those
+> change.
 
 ---
 
@@ -75,13 +79,18 @@ These apply to every file touched or created in this project:
 ### 1 — Benchmark + Corruptions + GPU Runs
 
 #### 1.1 — Stabilize and run batch benchmark
-**Goal:** `benchmark_summary.json` with AUROC, F1, and inference time per model, on both datasets.
+**Goal:** `benchmark_summary.json` with AUROC, F1, **Recall@FPR=1%**, **macro/per-defect recall** and inference time per model, on both datasets.
 
 - Verify `main.py` runs end-to-end with all supported models.
 - Fix any model-loading or evaluation bugs found during the run.
 - Launch on GPU cluster:
   - **Job A:** Clean benchmark, standard dataset (Real-IAD), all models.
+  - **Job A val_defect (rerun):** Same models with `val_f1` thresholding + balanced val
+    (50/50 good/bad, per-defect-type cap). Drives the headline F1/Recall numbers — see
+    [METHOD.md §3](METHOD.md#3-train--val--test-composition-is-the-second-dominant-axis).
   - **Job B:** Clean benchmark, real industrial dataset (Deceuninck), all models.
+  - **Job B val_defect (new):** Same models with `val_f1` + balanced val. Use
+    [scripts/run_jobB_val_defect_colab.sh](scripts/run_jobB_val_defect_colab.sh).
 - After results: identify the **best-performing model** by inspecting `benchmark_summary.json` manually → this name is then passed to `runtime_main.py --model <name>` for streaming. Never auto-select.
 
 #### 1.2 — Build corruption module
@@ -190,7 +199,11 @@ Dashboard must show (in a single screen, readable by a factory operator):
 
 ```
 data/runs/<run_name>/
-├── benchmark_summary.json              # Model comparison table + run context
+├── benchmark_summary.json              # Model comparison table + run context.
+│                                       # Per-model entry now includes:
+│                                       #   recall_at_fpr_1pct, recall_at_fpr_5pct,
+│                                       #   macro_recall, weighted_recall,
+│                                       #   per_defect_recall, per_defect_support
 ├── predictions_<model>.json            # Per-frame records, streaming-shape JSON (with corruption_type, severity, dataset)
 ├── live_status_<model>.json            # Per-(model × corruption × severity × dataset) session summary, streaming-shape JSON (with AUROC, F1)
 ├── plots/

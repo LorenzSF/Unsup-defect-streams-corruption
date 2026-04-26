@@ -216,6 +216,75 @@ def _quantile_threshold_from_negatives(
     return float(np.quantile(negatives, q))
 
 
+def _recall_at_fpr(
+    y_true: np.ndarray,
+    y_score: np.ndarray,
+    target_fpr: float,
+) -> Optional[float]:
+    """Highest TPR achievable while FPR stays at or below ``target_fpr``.
+
+    Prevalence-invariant operating-point summary — answers "if the line
+    only tolerates ``target_fpr`` false alarms, what fraction of defects
+    do we catch?". Returns ``None`` if y_true lacks both classes; ``0.0``
+    when no threshold satisfies the FPR cap.
+    """
+    if y_true.size == 0 or len(np.unique(y_true)) < 2:
+        return None
+    from sklearn.metrics import roc_curve
+
+    fpr, tpr, _ = roc_curve(y_true, y_score)
+    mask = fpr <= float(target_fpr)
+    if not np.any(mask):
+        return 0.0
+    return float(np.max(tpr[mask]))
+
+
+def _per_defect_recall(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Per-``defect_type`` recall plus simple-mean and support-weighted aggregates.
+
+    The macro mean treats every defect class as equally important — useful
+    when one class dominates the dataset (e.g. Deceuninck scratches at 80%
+    of all bads) and the global recall would otherwise hide failures on
+    minority classes. The weighted mean reproduces the global recall on
+    bads and is reported for completeness.
+    """
+    by_type: Dict[str, Dict[str, int]] = {}
+    for r in rows:
+        if r.get("label") != 1:
+            continue
+        dtype = r.get("defect_type") or "_unknown"
+        bucket = by_type.setdefault(dtype, {"tp": 0, "fn": 0})
+        if r.get("pred_is_anomaly") == 1:
+            bucket["tp"] += 1
+        else:
+            bucket["fn"] += 1
+
+    per_recall: Dict[str, float] = {}
+    per_support: Dict[str, int] = {}
+    for dtype, bucket in by_type.items():
+        n = bucket["tp"] + bucket["fn"]
+        per_support[dtype] = n
+        per_recall[dtype] = (bucket["tp"] / n) if n > 0 else 0.0
+
+    if per_recall:
+        macro = sum(per_recall.values()) / len(per_recall)
+        total = sum(per_support.values())
+        weighted = (
+            sum(r * per_support[d] for d, r in per_recall.items()) / total
+            if total > 0 else 0.0
+        )
+    else:
+        macro = 0.0
+        weighted = 0.0
+
+    return {
+        "per_defect_recall": {k: round(v, 6) for k, v in per_recall.items()},
+        "per_defect_support": per_support,
+        "macro_recall": round(macro, 6),
+        "weighted_recall": round(weighted, 6),
+    }
+
+
 def _apply_threshold(rows: List[Dict[str, Any]], threshold: float) -> None:
     for row in rows:
         row["pred_is_anomaly"] = int(float(row["score"]) >= threshold)
@@ -735,6 +804,19 @@ def _run_single_model(
         idx = int(runtime_cfg["resolved_device"].split(":")[1])
         peak_vram_mb = float(torch.cuda.max_memory_allocated(idx) / (1024 * 1024))
 
+    # Industrial-relevance metrics: prevalence-invariant operating points
+    # plus per-defect breakdown so a dominant class can't hide failures
+    # on minority classes (Deceuninck scratches are 80% of all bads).
+    y_true_test = np.asarray(
+        [r["label"] for r in rows if r["label"] in (0, 1)], dtype=np.int32,
+    )
+    y_score_test = np.asarray(
+        [r["score"] for r in rows if r["label"] in (0, 1)], dtype=np.float64,
+    )
+    recall_at_1 = _recall_at_fpr(y_true_test, y_score_test, 0.01)
+    recall_at_5 = _recall_at_fpr(y_true_test, y_score_test, 0.05)
+    per_defect = _per_defect_recall(rows)
+
     n_test = max(1, len(rows))
     summary = {
         "model": model_name,
@@ -754,6 +836,16 @@ def _run_single_model(
     for key, value in val_metrics.items():
         summary[f"val_{key}"] = value
     summary.update(metrics)
+    summary["recall_at_fpr_1pct"] = (
+        round(recall_at_1, 6) if recall_at_1 is not None else None
+    )
+    summary["recall_at_fpr_5pct"] = (
+        round(recall_at_5, 6) if recall_at_5 is not None else None
+    )
+    summary["macro_recall"] = per_defect["macro_recall"]
+    summary["weighted_recall"] = per_defect["weighted_recall"]
+    summary["per_defect_recall"] = per_defect["per_defect_recall"]
+    summary["per_defect_support"] = per_defect["per_defect_support"]
     summary["model_cfg"] = dict(model_cfg)
 
     # Persist corruption identity per row so block 1.3 can build robustness

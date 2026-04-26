@@ -1,4 +1,10 @@
-"""Aggregate jobA benchmark_summary.json files across categories for PatchCore, PaDiM, SubspaceAD."""
+"""Aggregate jobA benchmark_summary.json files across categories for PatchCore, PaDiM, SubspaceAD.
+
+For the more general analyzer (Job B, val_defect overlays, per-defect
+recall dump) use ``scripts/analyze_runs.py`` — this script is the legacy
+"clean JobA" entry point and is kept stable for the notebooks that depend
+on its TSV layout.
+"""
 import json
 import re
 from pathlib import Path
@@ -7,6 +13,7 @@ from statistics import mean, median, stdev
 ROOT = Path(__file__).resolve().parents[1] / "data" / "outputs"
 MODELS = ["anomalib_patchcore", "anomalib_padim", "subspacead"]
 METRICS = ["auroc", "aupr", "f1", "precision", "recall", "accuracy",
+           "recall_at_fpr_1pct", "recall_at_fpr_5pct", "macro_recall", "weighted_recall",
            "ms_per_image", "fps", "peak_vram_mb", "fit_seconds", "predict_seconds",
            "threshold_used", "test_samples", "train_samples"]
 
@@ -14,6 +21,9 @@ rows = []
 for d in sorted(ROOT.glob("jobA_*")):
     name = d.name
     if "csflow" in name:
+        continue
+    # Skip val_defect overlay runs — analyze_runs.py with --prefix jobA_val_defect_ handles those.
+    if name.startswith("jobA_val_defect_"):
         continue
     m = re.match(r"jobA_(.+)_\d{8}_\d{6}$", name)
     category = m.group(1) if m else name
@@ -37,7 +47,8 @@ for r in rows:
 
 # Summary per model
 print("\n=== PER-MODEL AGGREGATES (mean across all categories) ===")
-print("model\tn\tauroc\taupr\tf1\tprecision\trecall\taccuracy\tms_per_image\tfps\tpeak_vram_mb\tfit_seconds")
+print("model\tn\tauroc\taupr\tf1\tprecision\trecall\trec@fpr1\tmacro_rec\tweighted_rec"
+      "\taccuracy\tms_per_image\tfps\tpeak_vram_mb\tfit_seconds")
 for model in MODELS:
     sub = [r for r in rows if r["model"] == model]
     if not sub:
@@ -49,7 +60,9 @@ for model in MODELS:
         vals = [r[k] for r in sub if r[k] is not None]
         return median(vals) if vals else float("nan")
     print(f"{model}\t{len(sub)}\t{avg('auroc'):.4f}\t{avg('aupr'):.4f}\t{avg('f1'):.4f}"
-          f"\t{avg('precision'):.4f}\t{avg('recall'):.4f}\t{avg('accuracy'):.4f}"
+          f"\t{avg('precision'):.4f}\t{avg('recall'):.4f}"
+          f"\t{avg('recall_at_fpr_1pct'):.4f}\t{avg('macro_recall'):.4f}\t{avg('weighted_recall'):.4f}"
+          f"\t{avg('accuracy'):.4f}"
           f"\t{avg('ms_per_image'):.2f}\t{avg('fps'):.2f}\t{avg('peak_vram_mb'):.1f}"
           f"\t{avg('fit_seconds'):.2f}")
 

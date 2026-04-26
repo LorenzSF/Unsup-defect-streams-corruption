@@ -15,7 +15,10 @@
       "Bash(python scripts/analyze_jobA.py)",
       "Bash(PYTHONPATH=src python -m pytest src/corruptions/ -x -q)",
       "Read(//c/Users/Usuario/Desktop/**)",
-      "Read(//c/Users/Usuario/Downloads/**)"
+      "Read(//c/Users/Usuario/Downloads/**)",
+      "Bash(chmod +x \"/c/Users/Usuario/Desktop/Thesis/Pipeline/Real-time-visual-defect-detection/scripts/run_jobB_val_defect_colab.sh\")",
+      "Bash(PYTHONPATH=src python -m pytest tests/ -q)",
+      "Bash(python scripts/analyze_runs.py --prefix jobA_val_defect_)"
     ]
   }
 }

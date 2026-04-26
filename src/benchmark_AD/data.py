@@ -521,6 +521,108 @@ def _split_stratified_groups(
     return train, test
 
 
+def _group_bads_by_defect_type(
+    bads: List[LabeledSample],
+) -> Dict[str, List[LabeledSample]]:
+    """Bucket bad samples by ``defect_type`` (None → "_unknown")."""
+    by_type: Dict[str, List[LabeledSample]] = {}
+    for s in bads:
+        key = s.defect_type if s.defect_type is not None else "_unknown"
+        by_type.setdefault(key, []).append(s)
+    return by_type
+
+
+def _select_val_bads_balanced(
+    bads: List[LabeledSample],
+    tolerance: float,
+    rng: random.Random,
+    test_ratio: float = 0.2,
+) -> Tuple[List[LabeledSample], List[LabeledSample]]:
+    """Per-defect-type val sampling capped at ``min_class * (1 + tolerance)``.
+
+    Each defect type contributes the same number of bads to val (within the
+    tolerance window), so the calibrator sees every defect category, not just
+    the dominant one. The dominant class is capped; its remaining samples go
+    to test, preserving the natural distribution there.
+
+    To keep per-defect test recall measurable, every class reserves at least
+    ``ceil(test_ratio * len(class))`` samples for test before the val cap is
+    applied. Without the reserve, minority classes (e.g. Deceuninck's
+    21-image *Black spots*) would be fully consumed by val and recall on
+    them in test would be undefined.
+
+    When fewer than two defect types are present, returns ``([], bads)`` so
+    the caller can fall back to the natural ``val_ratio`` split.
+
+    Returns ``(val_bads, remaining_bads_for_test)``.
+    """
+    by_type = _group_bads_by_defect_type(bads)
+    if len(by_type) < 2:
+        return [], list(bads)
+
+    sizes = [len(v) for v in by_type.values()]
+    min_size = min(sizes)
+    cap = max(1, math.ceil(min_size * (1.0 + tolerance)))
+
+    val_bads: List[LabeledSample] = []
+    remaining: List[LabeledSample] = []
+    for samples in by_type.values():
+        groups = _group_by_sample_id(samples)
+        rng.shuffle(groups)
+        flat = [s for g in groups for s in g]
+        # Always leave at least test_reserve samples in test so per-defect
+        # recall stays measurable. With test_ratio=0.2 and a 21-image class
+        # this is ceil(0.2 * 21) = 5 — the splitter will not eat them.
+        test_reserve = max(1, math.ceil(float(test_ratio) * len(flat)))
+        max_for_val = max(0, len(flat) - test_reserve)
+        n_val = min(cap, max_for_val)
+        val_bads.extend(flat[:n_val])
+        remaining.extend(flat[n_val:])
+    return val_bads, remaining
+
+
+def _take_n_goods_for_val(
+    train: List[LabeledSample],
+    n_target: int,
+    rng: random.Random,
+) -> Tuple[List[LabeledSample], List[LabeledSample]]:
+    """Hold out exactly ``n_target`` good samples from *train* for val.
+
+    Honours ``sample_id`` grouping where possible (Real-IAD multi-view) but
+    falls back to per-image splitting for the last partial group when the
+    target lands mid-group. Non-good samples in ``train`` (e.g. unlabeled)
+    pass through to the new train list untouched.
+    """
+    goods = [s for s in train if s.label == 0]
+    others = [s for s in train if s.label != 0]
+    if n_target <= 0 or not goods:
+        return list(train), []
+
+    groups = _group_by_sample_id(goods)
+    rng.shuffle(groups)
+
+    val: List[LabeledSample] = []
+    leftover_groups: List[List[LabeledSample]] = []
+    for g in groups:
+        if len(val) + len(g) <= n_target:
+            val.extend(g)
+        else:
+            leftover_groups.append(g)
+
+    # If group-respecting selection fell short, top up from the leftover pool
+    # one image at a time. This breaks group integrity for the partial group
+    # only — acceptable since the alternative is failing the 50/50 contract.
+    if len(val) < n_target:
+        flat_leftover = [s for g in leftover_groups for s in g]
+        need = n_target - len(val)
+        val.extend(flat_leftover[:need])
+        train_remainder = flat_leftover[need:]
+    else:
+        train_remainder = [s for g in leftover_groups for s in g]
+
+    return train_remainder + others, val
+
+
 def apply_dataset_split(
     samples: List[LabeledSample],
     split_cfg: Dict[str, Any],
@@ -550,6 +652,19 @@ def apply_dataset_split(
         * ``train_on_good_only`` *(bool)*  when ``True``, all bad
           samples are routed to the test set (suitable for one-class /
           unsupervised anomaly detection models, default ``True``).
+        * ``val_balance`` *(str)*  ``"natural"`` (default) keeps the
+          existing val_ratio slice. ``"equal"`` forces val to contain
+          equal numbers of good and bad samples — only meaningful when
+          ``train_on_good_only=True`` and a bad holdout is built. The
+          F1 calibrator is then unbiased by val prevalence.
+        * ``val_bad_balance_by_type`` *(bool)*  when ``True``, the val
+          bad holdout takes the same number of samples from every
+          ``defect_type``, capped at
+          ``ceil(min_class_size * (1 + val_balance_tolerance))``. Falls
+          back to natural slicing when fewer than two defect types are
+          present. Default ``False``.
+        * ``val_balance_tolerance`` *(float)*  tolerance window used by
+          the per-defect-type cap. Default ``0.15``.
         * ``seed`` *(int | null)*  RNG seed; falls back to
           *fallback_seed* when absent or ``None``.
     fallback_seed:
@@ -568,6 +683,20 @@ def apply_dataset_split(
     val_ratio = float(split_cfg.get("val_ratio", 0.1))
     stratify = bool(split_cfg.get("stratify", True))
     train_on_good_only = bool(split_cfg.get("train_on_good_only", True))
+
+    # New industrial-calibration knobs (default to legacy behaviour):
+    #   val_balance: "natural" keeps the val_ratio slice as-is.
+    #                "equal" forces val to be 50/50 good/bad (caps val_good
+    #                to len(val_bad_holdout) so the F1 curve is not biased
+    #                by val prevalence).
+    #   val_bad_balance_by_type: when True, the val bad pool takes the same
+    #                number of samples per defect_type, capped at
+    #                ``ceil(min_class * (1 + val_balance_tolerance))``.
+    #                Ensures the calibrator sees every defect category, not
+    #                just the dominant one.
+    val_balance = str(split_cfg.get("val_balance", "natural")).lower()
+    val_bad_balance_by_type = bool(split_cfg.get("val_bad_balance_by_type", False))
+    val_balance_tolerance = float(split_cfg.get("val_balance_tolerance", 0.15))
 
     # --- Separate by group ------------------------------------------------
     good, bad, unlabeled = _partition_by_label(samples)
@@ -595,12 +724,20 @@ def apply_dataset_split(
     # the train_on_good_only branch so threshold calibrators see both classes.
     val_bad_holdout: List[LabeledSample] = []
     if train_on_good_only:
-        # Bad samples never enter train. A val_ratio slice goes into val so
-        # val_f1 / val_quantile have positives to work with; the rest goes
-        # to test. Train remains one-class.
+        # Bad samples never enter train. A holdout goes to val so the
+        # calibrator (val_f1 / val_quantile) sees both classes; the rest
+        # goes to test. Train remains one-class.
         train_good, test_good = _split_group(good, test_ratio, rng)
         train_unlabeled, test_unlabeled = _split_group(unlabeled, test_ratio, rng)
-        test_bad, val_bad_holdout = _split_group(bad, val_ratio, rng)
+        if val_bad_balance_by_type:
+            val_bad_holdout, test_bad = _select_val_bads_balanced(
+                bad, val_balance_tolerance, rng, test_ratio=test_ratio,
+            )
+            if not val_bad_holdout:
+                # Fewer than two defect types — fall back to natural slicing.
+                test_bad, val_bad_holdout = _split_group(bad, val_ratio, rng)
+        else:
+            test_bad, val_bad_holdout = _split_group(bad, val_ratio, rng)
         train = train_good + train_unlabeled
         test = test_good + test_unlabeled + test_bad
     elif stratify:
@@ -614,7 +751,11 @@ def apply_dataset_split(
     # Optional validation holdout taken from the train split.
     val: List[LabeledSample] = []
     if val_ratio > 0.0 and len(train) > 0:
-        if stratify:
+        if val_balance == "equal" and train_on_good_only and val_bad_holdout:
+            # 50/50 contract: val_good count matches the bad holdout exactly.
+            # Goods not picked for val stay in train.
+            train, val = _take_n_goods_for_val(train, len(val_bad_holdout), rng)
+        elif stratify:
             tr_good, tr_bad, tr_unl = _partition_by_label(train)
             train, val = _split_stratified_groups(tr_good, tr_bad, tr_unl, val_ratio, rng)
         else:

@@ -1,22 +1,24 @@
-# Job A "val_defect" overlay — same 3 feature-based models as
-# colab_featurebased.yaml, but with thresholding.mode = "val_f1" and the
-# industrial-calibration split rules:
+# Job B "val_defect" overlay — same 3 feature-based models as
+# colab_featurebased_deceuninck.yaml, but with thresholding.mode = "val_f1"
+# and the industrial-calibration split rules:
 #   * val_balance: equal              → val ends up 50/50 good/bad so the
-#                                       F1 curve is not biased by val
-#                                       prevalence (which varies wildly
-#                                       across categories).
-#   * val_bad_balance_by_type: true   → per defect_type the val bad pool
-#                                       is capped at ceil(min_class *
-#                                       (1 + tolerance)). The dominant
-#                                       defect class no longer monopolises
-#                                       calibration.
-#   * val_balance_tolerance: 0.15     → ±15% wiggle room around the
-#                                       smallest defect class.
+#                                       F1 curve is unbiased by Deceuninck's
+#                                       91% bad-heavy test prevalence.
+#   * val_bad_balance_by_type: true   → per defect_type (Black spots,
+#                                       Cleaning felt, Degassing, Pigment
+#                                       spill, Scratch in extrusion
+#                                       direction) the val bad pool is
+#                                       capped at ceil(min_class * (1 +
+#                                       tolerance)). With min_class = 21
+#                                       (Black spots) and tolerance 0.15,
+#                                       cap ≈ 25 per type. Scratches no
+#                                       longer monopolise calibration.
+#   * val_balance_tolerance: 0.15     → ±15% wiggle room.
 
 _extends: ../default.yaml
 
 run:
-  run_name: "jobA_val_defect"
+  run_name: "jobB_val_defect"
   output_dir: "/content/work/runs"
 
 runtime:
@@ -28,11 +30,12 @@ runtime:
 
 dataset:
   source_type: "folder"
-  format: "real_iad"
-  # Overridden per-category by scripts/run_jobA_val_defect_colab.sh.
+  format: "auto"
+  # Overridden by scripts/run_jobB_val_defect_colab.sh via --dataset-path
+  # (local SSD copy). The "auto" loader recognises defects/ via _BAD_DIR_NAMES
+  # and uses each subfolder name as defect_type.
   path: "/content/work/current"
   extract_dir: "/content/work/current"
-  cameras: "C1"
   split:
     val_balance: "equal"
     val_bad_balance_by_type: true

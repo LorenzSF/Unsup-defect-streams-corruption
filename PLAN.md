@@ -49,8 +49,7 @@
 │       └── dashboard.py           # Live XAI dashboard (Streamlit or Dash)
 │
 ├── notebooks/
-│   ├── benchmark_graphs and tables.ipynb  # Results analysis
-│   └── example_notebook.ipynb
+│   └── benchmark_graphs and tables.ipynb  # Results analysis
 │
 └── data/
     └── runs/                      # Auto-generated output per run
@@ -82,10 +81,10 @@ These apply to every file touched or created in this project:
 | JobA clean (val_quantile) | ✅ 30 cats × 3 feature-based + partial trained | Headline numbers untrustworthy on F1/Recall; AUROC valid. |
 | **JobA val_defect (val_f1)** | ✅ 19 / 30 cats × 3 feature-based | Cleared §9 gates; default switched to `val_f1` on 2026-04-27. See [data/outputs/jobA_val_defect_V1/_analysis/REPORT.md](data/outputs/jobA_val_defect_V1/_analysis/REPORT.md). |
 | JobA val_f1 missing 11 cats | 🟡 todo | porcelain_doll, regulator, tape, toy, toy_brick, u_block, usb, usb_adaptor, vcpill, wooden_beads, woodstick. |
-| JobA trained (CSFlow/DRAEM/STFPM/RD4AD on HPC) | 🟡 partial | csflow audiojack only, *and on a pre-val_f1 clone* (image_size 256, mode=val_quantile). Re-run after `git pull` on wICE — see [docs/HPC_KU_LEUVEN_RUNBOOK.md §5.5](docs/HPC_KU_LEUVEN_RUNBOOK.md). |
+| JobA trained (CSFlow/DRAEM/STFPM/RD4AD on HPC) | 🟡 partial | csflow audiojack only. See [docs/HPC_KU_LEUVEN_RUNBOOK.md §5.5](docs/HPC_KU_LEUVEN_RUNBOOK.md). |
 | JobB Deceuninck clean (val_quantile) | ✅ 1 cell × 3 models | AUROC ≥ 0.995 across the 3 models. |
 | **JobB Deceuninck val_f1** | 🟡 todo | Re-run with the new default. Driver: [scripts/run_jobB_val_defect_colab.sh](scripts/run_jobB_val_defect_colab.sh). |
-| Corruption module | 🟡 partial | See `src/corruptions/` — registry + tests exist; pipeline wiring + JobC pending. |
+| Corruption module | 🟡 partial | See `src/corruptions/` — 3-corruption registry, pipeline wiring, smoke driver, and tests done. JobC (§1.3) pending. |
 | Streaming module + dashboard | ⛔ to build | Block 2 below. |
 | Notebook tables/plots | 🟡 partial | Tables A–D (TSV) generated under `_analysis/`; not yet imported into the notebook. |
 
@@ -109,26 +108,23 @@ These apply to every file touched or created in this project:
 #### 1.2 — Build corruption module
 **Goal:** `src/corruptions/corruption_registry.py` integrated into the batch pipeline.
 
-- Implement the following corruption types, each as a standalone function accepting `(image: np.ndarray, severity: int) -> np.ndarray` where severity ∈ {1, 2, 3, 4, 5}:
-  - `gaussian_noise` — additive pixel noise
+- ✅ Implemented 3 corruption types in [src/corruptions/corruption_registry.py](src/corruptions/corruption_registry.py), each `(image: np.ndarray, severity: int) -> np.ndarray` with severity ∈ {1..5}:
   - `gaussian_blur` — spatial blurring
   - `motion_blur` — directional blur simulating camera motion
-  - `brightness_shift` — uniform exposure change
-  - `contrast_reduction` — reduce dynamic range
   - `jpeg_compression` — lossy compression artifact
-
-- Expose a `get_corruption(name, severity)` factory function as the public API.
-- Wire into `default.yaml` via existing `corruption:` section (key: `type`, `severity`).
-- Quick test: one model, one corruption, one dataset category.
+- ✅ `get_corruption(name, severity)` factory exposed as the public API.
+- ✅ Wired into `default.yaml` `corruption:` section (`enabled / type / severity`); `--corruption` and `--severity` CLI flags on `main.py` override the YAML.
+- ✅ Pipeline applies corruption to **test images only** (after resize, before normalize); rows are stamped with `corruption_type / severity / dataset`; `live_status_<model>.json` mirrors the streaming session schema; corrupted TP/FP/FN/TN samples are exported per run.
+- ✅ Smoke driver: [scripts/run_smoke_corruption.sh](scripts/run_smoke_corruption.sh) — `anomalib_padim × gaussian_blur × severity 3` on the local Deceuninck dataset.
 
 #### 1.3 — Launch corruption benchmark + start streaming module
 **Goal:** Job C running on GPU, JSON corruption outputs saved, `streaming_input/` ready.
 
 - Configure `src/benchmark_AD/default.yaml` and per-dataset configs (`configs/realiad.yaml`, `configs/industrial.yaml`) for:
   - Full model list, same as Jobs A/B. No automatic model selection.
-  - `corruption:` enabled with all 6 types from §1.2 and severities `{1, 3, 5}`.
+  - `corruption:` enabled with all 3 types from §1.2 and severities `{1, 3, 5}`.
 - Launch on GPU cluster:
-  - **Job C:** Batch benchmark with corruptions, all models × 6 corruptions × severities `{1, 3, 5}`, on Real-IAD and Deceuninck.
+  - **Job C:** Batch benchmark with corruptions, all models × 3 corruptions × severities `{1, 3, 5}`, on Real-IAD and Deceuninck.
 - Save Job C outputs under `data/runs/<run_name>/`, one session folder per `(model × corruption × severity × dataset)`, using JSON only:
   - `predictions.json`: per-frame records `{model, path, label, defect_type, score, pred_is_anomaly, heatmap_path, corruption_type, severity, dataset}`.
   - `live_status.json`: session summary with streaming status keys (`active_model`, `frames_seen`, `decisions_emitted`, `mean_latency_ms`, `p95_latency_ms`, `threshold`, ...) plus `AUROC`, `F1`, `corruption_type`, `severity`, `dataset`.
@@ -233,7 +229,7 @@ Sequenced by dependency (each block unblocks the next). Status: ✅ done · 🟡
 7. 🟡 Finalize [src/corruptions/corruption_registry.py](src/corruptions/corruption_registry.py)
    with the 6 functions from §1.2 and `get_corruption(name, severity)` factory.
 8. 🟡 Wire the corruption block into the pipeline (test-set only, training/val stay clean).
-9. ⛔ **Launch Job C** on GPU: 6 corruption types × {1, 3, 5} severities
+9. ⛔ **Launch Job C** on GPU: 3 corruption types × {1, 3, 5} severities
    × 3 feature-based models × Real-IAD (subset acceptable per fallback) + Deceuninck.
 10. ⛔ Aggregate Job C → robustness curves (AUROC vs severity per corruption).
 

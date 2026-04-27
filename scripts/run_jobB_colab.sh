@@ -84,3 +84,20 @@ touch "${marker}"
 echo "[jobB] done -> ${dest}"
 
 rm -rf "${local_dataset}"
+
+# Release Colab resources once the run is finished and synced.
+python - <<'PY'
+import gc
+try:
+    import torch
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+except Exception:
+    pass
+gc.collect()
+try:
+    from google.colab import runtime
+    runtime.unassign()
+except Exception:
+    pass
+PY

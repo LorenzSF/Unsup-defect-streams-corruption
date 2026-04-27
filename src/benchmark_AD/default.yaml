@@ -62,7 +62,7 @@ preprocessing:
 # enable from a per-run overlay or via --corruption / --severity on the CLI.
 corruption:
   enabled: false
-  type: "gaussian_noise"        # see src/corruptions/corruption_registry.py
+  type: "gaussian_blur"         # one of: gaussian_blur, motion_blur, jpeg_compression
   severity: 3                   # 1..5
 
 # Single-model mode

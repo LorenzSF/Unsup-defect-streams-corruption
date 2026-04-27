@@ -23,7 +23,19 @@
       "Bash(python scripts/split_simulation.py)",
       "Bash(python scripts/compare_clean_vd.py)",
       "Bash(awk -F'\\\\t' 'BEGIN{OFS=\"\\\\t\"}{print $1,$2,\"AUROC\",$3\"->\"$4\"\\(\"$5\"\\)\",\"F1\",$9\"->\"$10\"\\(\"$11\"\\)\",\"P\",$12\"->\"$13,\"R\",$14\"->\"$15,\"thr\",$16\"->\"$17}')",
-      "Bash(awk -F'\\\\t' 'NR==1 || $1==\"plastic_plug\" || $1==\"plastic_nut\"' \"data/outputs/jobA_val_defect_V1/_analysis/tableA_per_cat_model.tsv\")"
+      "Bash(awk -F'\\\\t' 'NR==1 || $1==\"plastic_plug\" || $1==\"plastic_nut\"' \"data/outputs/jobA_val_defect_V1/_analysis/tableA_per_cat_model.tsv\")",
+      "Bash(python -c \"import json,sys; nb=json.load\\(sys.stdin\\); print\\('cells:', len\\(nb.get\\('cells',[]\\)\\)\\); print\\('kernel:', nb.get\\('metadata',{}\\).get\\('kernelspec',{}\\)\\)\")",
+      "Bash(python -c \"import json; nb=json.load\\(open\\(r'C:\\\\Users\\\\Usuario\\\\Desktop\\\\Thesis\\\\Pipeline\\\\Real-time-visual-defect-detection\\\\notebooks\\\\benchmark_graphs and tables.ipynb'\\)\\); print\\('cells:', len\\(nb['cells']\\)\\); print\\('kernel:', nb.get\\('metadata',{}\\).get\\('kernelspec',{}\\).get\\('name','?'\\)\\); print\\('lang:', nb.get\\('metadata',{}\\).get\\('language_info',{}\\).get\\('name','?'\\)\\)\")",
+      "Bash(python -c \"import json; nb=json.load\\(open\\(r'C:\\\\Users\\\\Usuario\\\\Desktop\\\\Thesis\\\\Pipeline\\\\Real-time-visual-defect-detection\\\\notebooks\\\\analyze jobA.ipynb'\\)\\); print\\('valid;', len\\(nb['cells']\\), 'cells'\\)\")",
+      "Bash(python -c \"import json; nb=json.load\\(open\\(r'C:\\\\Users\\\\Usuario\\\\Desktop\\\\Thesis\\\\Pipeline\\\\Real-time-visual-defect-detection\\\\notebooks\\\\compare jobB vs jobA.ipynb'\\)\\); print\\('valid;', len\\(nb['cells']\\), 'cells'\\)\")",
+      "Bash(jupyter nbconvert *)",
+      "Bash(python)",
+      "Bash(awk -F_ '{print $3\"_\"$4}')",
+      "Bash(PYTHONPATH=src python -m pytest src/corruptions/test_corruption.py src/corruptions/test_pipeline_benchmark.py -v)",
+      "Bash(PYTHONPATH=src python -m pytest --version)",
+      "Bash(PYTHONPATH=src .venv/Scripts/python main.py --help)",
+      "Bash(chmod +x \"c:/Users/Usuario/Desktop/Thesis/Pipeline/Real-time-visual-defect-detection/scripts/run_smoke_corruption.sh\")",
+      "Bash(bash -n \"c:/Users/Usuario/Desktop/Thesis/Pipeline/Real-time-visual-defect-detection/scripts/run_smoke_corruption.sh\")"
     ]
   }
 }

@@ -6,6 +6,12 @@ Each corruption is a standalone function with the contract
 dtype so the pipeline can swap a clean image for a corrupted one without
 any branching downstream.
 
+The registry is intentionally restricted to the three corruption types
+named in PLAN.md §1.2 — ``gaussian_blur``, ``motion_blur``,
+``jpeg_compression`` — chosen as the minimal set that covers the
+visual-degradation modes a factory line is most likely to encounter
+(focus loss, camera shake, transmission/storage compression).
+
 Stochastic corruptions seed their RNG from a hash of the image bytes so
 the same image always receives the same perturbation across reruns;
 this keeps benchmark numbers reproducible without a global seed.
@@ -43,15 +49,6 @@ def _image_rng(image: np.ndarray) -> np.random.Generator:
     return np.random.default_rng(seed)
 
 
-def gaussian_noise(image: np.ndarray, severity: int) -> np.ndarray:
-    sigmas = {1: 5.0, 2: 12.0, 3: 20.0, 4: 35.0, 5: 55.0}
-    sigma = sigmas[_validate_severity(severity)]
-    rng = _image_rng(image)
-    noise = rng.normal(0.0, sigma, size=image.shape).astype(np.float32)
-    out = image.astype(np.float32) + noise
-    return np.clip(out, 0.0, 255.0).astype(image.dtype)
-
-
 def gaussian_blur(image: np.ndarray, severity: int) -> np.ndarray:
     sigmas = {1: 1.0, 2: 1.8, 3: 2.6, 4: 3.6, 5: 5.0}
     sigma = sigmas[_validate_severity(severity)]
@@ -74,23 +71,6 @@ def motion_blur(image: np.ndarray, severity: int) -> np.ndarray:
     kernel /= max(float(kernel.sum()), 1e-6)
 
     return cv2.filter2D(image, ddepth=-1, kernel=kernel)
-
-
-def brightness_shift(image: np.ndarray, severity: int) -> np.ndarray:
-    deltas = {1: 10.0, 2: 20.0, 3: 30.0, 4: 45.0, 5: 60.0}
-    magnitude = deltas[_validate_severity(severity)]
-    rng = _image_rng(image)
-    sign = 1.0 if rng.random() < 0.5 else -1.0
-    out = image.astype(np.float32) + sign * magnitude
-    return np.clip(out, 0.0, 255.0).astype(image.dtype)
-
-
-def contrast_reduction(image: np.ndarray, severity: int) -> np.ndarray:
-    factors = {1: 0.85, 2: 0.70, 3: 0.55, 4: 0.40, 5: 0.25}
-    factor = factors[_validate_severity(severity)]
-    mean = float(np.mean(image))
-    out = (image.astype(np.float32) - mean) * factor + mean
-    return np.clip(out, 0.0, 255.0).astype(image.dtype)
 
 
 def jpeg_compression(image: np.ndarray, severity: int) -> np.ndarray:
@@ -116,11 +96,8 @@ def jpeg_compression(image: np.ndarray, severity: int) -> np.ndarray:
 
 
 _CORRUPTIONS: Dict[str, Callable[[np.ndarray, int], np.ndarray]] = {
-    "gaussian_noise": gaussian_noise,
     "gaussian_blur": gaussian_blur,
     "motion_blur": motion_blur,
-    "brightness_shift": brightness_shift,
-    "contrast_reduction": contrast_reduction,
     "jpeg_compression": jpeg_compression,
 }
 

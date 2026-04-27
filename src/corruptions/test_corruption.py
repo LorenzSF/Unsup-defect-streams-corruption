@@ -15,11 +15,8 @@ def _sample_image(seed: int = 0) -> np.ndarray:
 
 def test_registry_lists_expected_names():
     assert set(available_corruptions()) == {
-        "gaussian_noise",
         "gaussian_blur",
         "motion_blur",
-        "brightness_shift",
-        "contrast_reduction",
         "jpeg_compression",
     }
 
@@ -51,12 +48,13 @@ def test_get_corruption_rejects_unknown_name():
 @pytest.mark.parametrize("severity", [0, 6, -1, 10])
 def test_get_corruption_rejects_invalid_severity(severity: int):
     with pytest.raises(ValueError):
-        get_corruption("gaussian_noise", severity)
+        get_corruption("gaussian_blur", severity)
 
 
 def test_corruption_is_deterministic_per_image():
-    # The factory uses a per-image hash for stochastic corruptions, so two
+    # motion_blur picks its kernel angle from the per-image RNG, so two
     # independent calls on the same array must produce identical outputs.
+    # If this regresses, the registry has reintroduced a global-seed leak.
     image = _sample_image(seed=2)
-    apply = get_corruption("gaussian_noise", 3)
+    apply = get_corruption("motion_blur", 3)
     assert np.array_equal(apply(image), apply(image))

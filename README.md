@@ -159,9 +159,9 @@ python main.py --config src/benchmark_AD/configs/industrial.yaml `
   --run-name industrial_gblur_s3
 ```
 
-Or set `corruption.enabled: true` in the YAML. Available types: `gaussian_noise`,
-`gaussian_blur`, `motion_blur`, `brightness_shift`, `contrast_reduction`,
-`jpeg_compression`. Severity is an integer in `1..5`. Each summary row in
+Or set `corruption.enabled: true` in the YAML. Available types: `gaussian_blur`,
+`motion_blur`, `jpeg_compression` (the three essentials per PLAN.md §1.2).
+Severity is an integer in `1..5`. Each summary row in
 `benchmark_summary.json` carries `corruption_type` and `corruption_severity`
 so robustness curves can be built directly from the file. The same
 `--corruption` / `--severity` flags exist on `runtime_main.py` for symmetry;

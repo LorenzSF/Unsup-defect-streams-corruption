@@ -1,0 +1,86 @@
+# Job B - trained models on Deceuninck (Colab, model-major iteration).
+#
+# One model at a time over the full Deceuninck industrial dataset. The model
+# block carries sub-configs for all 4 trained models so a single config file
+# works for every model selection.
+#
+# This config follows the current METHOD baseline: thresholding.mode=val_f1
+# plus the patched train_on_good_only splitter from data.py, which routes a
+# val-ratio slice of anomalies into validation so threshold calibration sees
+# both classes without contaminating one-class training.
+#
+# Epoch counts target paper-comparable results, not the smoke-test defaults in
+# default.yaml. See the per-model comments for source.
+
+_extends: ../industrial.yaml
+
+run:
+  run_name: "jobB_trained_colab"
+  output_dir: "/content/work/runs"
+
+runtime:
+  device: "auto"
+  precision: "fp32"
+  num_workers: 2
+  pin_memory: true
+  cudnn_benchmark: true
+
+dataset:
+  source_type: "folder"
+  format: "auto"
+  # Overridden by scripts/run_jobB_trained_colab.sh via --dataset-path and
+  # --extract-dir after the dataset is copied to the local SSD.
+  path: "/content/work/current"
+  extract_dir: "/content/work/current"
+
+benchmark:
+  save_umap: false
+
+model:
+  # `name` is overridden by --model on the CLI; the value here is just a placeholder.
+  name: "anomalib_stfpm"
+  threshold: 0.5
+  thresholding:
+    mode: "val_f1"
+    target_fpr: 0.01
+
+  # Shared anomalib block (used by STFPM/CSFlow/DRAEM image-size + batch base).
+  anomalib:
+    image_size: 512
+    batch_size: 8
+    pre_trained: true
+    backbone: "wide_resnet50_2"
+    layers: ["layer2", "layer3"]
+
+  # STFPM (Salehi et al. 2021). Anomalib default ~100 epochs, lr 0.4 with SGD.
+  stfpm:
+    backbone: "resnet18"
+    layers: ["layer1", "layer2", "layer3"]
+    epochs: 100
+    learning_rate: 0.4
+
+  # CSFlow (Rudolph et al. 2022). Paper trains ~240 epochs.
+  # NOTE: ~80 min/run on T4 -> 40 h for a full sweep. Run on RunPod/HPC, not Colab.
+  csflow:
+    epochs: 240
+    learning_rate: 0.0002
+    cross_conv_hidden_channels: 1024
+    n_coupling_blocks: 4
+    clamp: 3
+
+  # DRAEM (Zavrtanik et al. 2021). Paper uses 700 epochs; 200 captures ~95%
+  # of final performance and is the common Real-IAD benchmark setting.
+  draem:
+    epochs: 200
+    learning_rate: 0.0001
+    beta: [0.2, 1.0]
+
+  # RD4AD (Deng & Li 2022). Paper trains 200 epochs with Adam(lr=0.005, betas=(0.5, 0.999)).
+  rd4ad:
+    image_size: 512
+    batch_size: 16
+    backbone: "wide_resnet50_2"
+    layers: ["layer1", "layer2", "layer3"]
+    epochs: 200
+    learning_rate: 0.005
+    anomaly_map_mode: "multiply"

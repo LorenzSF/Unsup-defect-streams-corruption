@@ -27,3 +27,11 @@ data/raw/extracted/
 # Docker build artifacts
 .docker/
 *.dockerbuild
+
+# Local workspace / notes
+.claude/
+.vscode/
+docs/
+memory/
+METHOD*
+*PLAN*

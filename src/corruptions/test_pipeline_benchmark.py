@@ -131,7 +131,7 @@ def test_pipeline_saves_corrupted_confusion_samples(
     monkeypatch.setattr(
         pipeline_module,
         "resolve_dataset_labeled",
-        lambda source_type, path, extract_dir: [train_sample, val_sample, *test_samples],
+        lambda source_type, path, extract_dir, **kwargs: [train_sample, val_sample, *test_samples],
     )
     monkeypatch.setattr(
         pipeline_module,

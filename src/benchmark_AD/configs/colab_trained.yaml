@@ -4,6 +4,11 @@
 # --model on the CLI). The model.* block carries sub-configs for all 4
 # trained models so a single config file works for every model selection.
 #
+# This config now follows the current METHOD baseline: thresholding.mode=val_f1
+# plus the patched train_on_good_only splitter from data.py, which routes a
+# val-ratio slice of anomalies into validation so threshold calibration sees
+# both classes without contaminating one-class training.
+#
 # Epoch counts target paper-comparable results, not the smoke-test defaults
 # in default.yaml. See the per-model comments for source.
 
@@ -36,7 +41,7 @@ model:
   name: "anomalib_stfpm"
   threshold: 0.5
   thresholding:
-    mode: "val_quantile"
+    mode: "val_f1"
     target_fpr: 0.01
 
   # Shared anomalib block (used by STFPM/CSFlow/DRAEM image-size + batch base).

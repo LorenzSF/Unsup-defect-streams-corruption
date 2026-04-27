@@ -2,6 +2,12 @@
 
 How to run one `(model, category)` pair from `jobA_trained` on **wICE / gpu_a100** through the **OnDemand** web portal. Distilled from the 2026-04-25/26 sessions that brought up CSFlow and DRAEM on `audiojack`.
 
+This runbook documents the current `jobA_trained` path implemented by
+[wice_trained.yaml](../src/benchmark_AD/configs/wice_trained.yaml): camera
+`C1`, good-only training, and threshold calibration with `val_f1`. The
+patched splitter in `data.py` routes a small anomaly holdout into validation,
+so `val_f1` sees both classes while the one-class training setup stays intact.
+
 > **Audience:** future-you, no VPN access, runs everything through https://ondemand.hpc.kuleuven.be.
 
 ---
@@ -195,12 +201,14 @@ Real-IAD `<category>.zip` archives contain a top-level `<category>/` folder. So:
 
 ### 5.5 Threshold calibration
 
-The split (`train_on_good_only: true`) routes all NG samples to test, leaving val all-OK. Consequence:
+The current split (`train_on_good_only: true`) keeps training good-only but
+routes a `val_ratio` slice of NG samples into validation. Consequence:
 
-- `val_quantile target_fpr=0.01` (the default) picks a high threshold from OK scores → high precision, low recall, low F1.
-- `val_f1` falls back to `val_quantile` when val has no positives (see [pipeline.py:250-257](../src/benchmark_AD/pipeline.py#L250-L257)).
+- `val_f1` now calibrates on both classes, which matches the current methodology baseline in [METHOD.md](../METHOD.md).
+- `val_quantile` is no longer the `jobA_trained` default.
+- If a category somehow reaches validation with only one class, `val_f1` falls back to `val_quantile` (see [pipeline.py:311-345](../src/benchmark_AD/pipeline.py#L311-L345)).
 
-→ **Use AUROC for cross-model comparison.** F1/precision/recall are honest as a "high-precision operating point" but are not the right number to optimise without modifying the splitter (see [PLAN job A_analize val_defect.md](../PLAN%20job%20A_analize%20val_defect.md) for that work stream).
+→ **Use AUROC for cross-model comparison first**, and report F1/precision/recall as calibrated operating-point metrics under the explicit `val_f1` policy.
 
 ### 5.6 Cache locations and first-run cost
 
@@ -216,7 +224,7 @@ For the four `jobA_trained` models to give **directly comparable** numbers acros
 |---|---|---|
 | Camera filter | `C1` | inherited from `colab_trained.yaml` |
 | Image size / preprocessing | 256 / ImageNet normalize | shared anomalib block |
-| Threshold mode | `val_quantile target_fpr=0.01` | shared `model.thresholding` |
+| Threshold mode | `val_f1` | shared `model.thresholding` |
 | Splits / seed | `test_ratio: 0.2`, `val_ratio: 0.1`, `seed: 42` | `default.yaml` |
 | Per-model hyperparams | epochs/lr from `colab_trained.yaml` | per-model block (paper-comparable) |
 
@@ -230,9 +238,8 @@ Sitting through 120 interactive runs is impractical. Use `sbatch` for the full s
 
 - Wall: 8-12 h per (model × 30 categories).
 - One job per model, four jobs in parallel — they don't share GPUs.
-- The Colab driver [scripts/run_jobA_trained_colab.sh](../scripts/run_jobA_trained_colab.sh) already implements the per-category loop with `.done` markers for resumability. Adapt it for wICE by swapping the Drive paths for `/scratch/.../realiad_1024/<cat>.zip` and the work dir for `/scratch/.../work/`.
-
-A wICE sbatch script is **not yet written** — see the existing Colab driver as the template, ask Claude to draft the sbatch wrapper when you're ready to run the full sweep.
+- The dedicated wICE driver [scripts/run_jobA_trained_wice.sh](../scripts/run_jobA_trained_wice.sh) already implements the per-category loop with `.done` markers for resumability and the correct `/scratch` + `uv` environment exports.
+- What is still missing is only the **Slurm wrapper** (`sbatch`) around that script. The batch job should call `bash scripts/run_jobA_trained_wice.sh <model> <cat1> ... <catN>` after the env exports from §2.
 
 ---
 

@@ -3,8 +3,14 @@
 > Living document with **partial conclusions** drawn from the JobA / JobB
 > analyses. Numbers below are from the 30-cat clean JobA run, the 7-cat
 > val_defect rerun, and the single JobB run. Everything is stamped *as of*
-> 2026-04-27 and reflects the current val_defect workflow:
-> patched splitter + `val_f1`, without balanced-val overrides.
+> 2026-04-27.
+>
+> Important scope note: the current methodology baseline for
+> threshold-sensitive metrics (`f1`, `recall`, `precision`) is the
+> **patched splitter + `val_f1`** workflow. This now applies both to the
+> feature-based overlays and to the existing `jobA_trained` configs
+> [colab_trained.yaml](src/benchmark_AD/configs/colab_trained.yaml) /
+> [wice_trained.yaml](src/benchmark_AD/configs/wice_trained.yaml).
 >
 > Companion to [PLAN.md](PLAN.md) (project-level scope) and
 > [PLAN job A_analize val_defect.md](PLAN%20job%20A_analize%20val_defect.md)
@@ -206,6 +212,8 @@ Differences highlighted.
 |---|---|---|---|---|---|
 | [colab_featurebased.yaml](src/benchmark_AD/configs/colab_featurebased.yaml) | Real-IAD | real_iad | C1 | val_quantile (target_fpr 0.01) | goods-only val |
 | [colab_featurebased_val_defect.yaml](src/benchmark_AD/configs/colab_featurebased_val_defect.yaml) | Real-IAD | real_iad | C1 | val_f1 | goods-only val + 10% anomalies |
+| [colab_trained.yaml](src/benchmark_AD/configs/colab_trained.yaml) | Real-IAD | real_iad | C1 | val_f1 | goods-only train + val gains anomalies via patched splitter |
+| [wice_trained.yaml](src/benchmark_AD/configs/wice_trained.yaml) | Real-IAD | real_iad | C1 | val_f1 | goods-only train + val gains anomalies via patched splitter |
 | [colab_featurebased_deceuninck.yaml](src/benchmark_AD/configs/colab_featurebased_deceuninck.yaml) | Deceuninck | auto | n/a | val_quantile | goods-only val |
 | [colab_featurebased_deceuninck_val_defect.yaml](src/benchmark_AD/configs/colab_featurebased_deceuninck_val_defect.yaml) | Deceuninck | auto | n/a | val_f1 | goods-only val + 10% anomalies |
 

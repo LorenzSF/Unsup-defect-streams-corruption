@@ -5,6 +5,12 @@
 # defects/<5 subfolders>/*.jpg, no JSON labels), so the bash driver runs the
 # pipeline once instead of looping over categories. Format "auto" — the loader
 # recognises `defects/` as the anomaly folder via _BAD_DIR_NAMES.
+#
+# Threshold mode is val_f1 (current project default — see METHOD.md §2).
+# Pairs with the patched splitter in data.py that routes 10% of anomalies
+# into val. The previous val_defect overlay
+# (colab_featurebased_deceuninck_val_defect.yaml) is now functionally
+# equivalent to this file; kept around for reproducibility of earlier runs.
 
 _extends: ../default.yaml
 
@@ -32,7 +38,7 @@ benchmark:
     - name: "anomalib_patchcore"
       threshold: 0.5
       thresholding:
-        mode: "val_quantile"
+        mode: "val_f1"
         target_fpr: 0.01
       anomalib:
         image_size: 512
@@ -47,7 +53,7 @@ benchmark:
     - name: "anomalib_padim"
       threshold: 0.5
       thresholding:
-        mode: "val_quantile"
+        mode: "val_f1"
         target_fpr: 0.01
       anomalib:
         image_size: 512
@@ -59,7 +65,7 @@ benchmark:
     - name: "subspacead"
       threshold: 0.5
       thresholding:
-        mode: "val_quantile"
+        mode: "val_f1"
         target_fpr: 0.01
       subspacead:
         model_ckpt: "facebook/dinov2-with-registers-large"

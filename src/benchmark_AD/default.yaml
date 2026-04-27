@@ -70,7 +70,10 @@ model:
   name: "anomalib_patchcore"
   threshold: 0.5
   thresholding:
-    mode: "val_quantile"      # fixed | val_f1 | val_quantile
+    # Project-wide default. Promoted from val_quantile to val_f1 after the
+    # 19-category JobA val_defect rerun (see METHOD.md §2 and §7). Falls back
+    # to val_quantile automatically when val ends up with a single class.
+    mode: "val_f1"            # fixed | val_f1 | val_quantile
     target_fpr: 0.01
 
   rd4ad:

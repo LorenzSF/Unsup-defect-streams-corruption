@@ -44,26 +44,7 @@ already handles the degenerate case (`val_f1` → falls back to
 
 ---
 
-## 3. Categories in scope (top-10 by mean AUPR, JobA clean)
-
-| Rank | Category | Clean mean AUPR | Clean mean AUROC |
-|---|---|---|---|
-| 1 | rolled_strip_base | 0.996 | 0.981 |
-| 2 | zipper | 0.995 | 0.978 |
-| 3 | sim_card_set | 0.990 | 0.971 |
-| 4 | transistor1 | 0.987 | 0.948 |
-| 5 | switch | 0.985 | 0.924 |
-| 6 | toothbrush | 0.982 | 0.914 |
-| 7 | terminalblock | 0.981 | 0.914 |
-| 8 | usb_adaptor | 0.978 | 0.899 *(CPU-fallback last run — also rerun)* |
-| 9 | pcb | 0.976 | 0.891 |
-| 10 | eraser | 0.975 | 0.888 |
-
-Three models per category × 10 categories = **30 new cells**.
-
----
-
-## 4. Expected outputs of the new run
+## 3. Expected outputs of the new run
 
 Each category produces `data/outputs/jobA_val_defect_<cat>_<UTC>/benchmark_summary.json`
 with the same schema as JobA clean. Key fields to inspect:
@@ -186,10 +167,3 @@ Export at 300 DPI `.png` and `.pdf` per [PLAN.md §2.3](PLAN.md).
   the latency table can include all 10 cats; if not, exclude again.
 
 ---
-
-## 10. Pointers
-
-- Original analysis: see chat history of 2026-04-26 session.
-- Aggregated clean numbers: regenerable via
-  `python scripts/analyze_jobA.py`.
-- wICE / Colab launch context: [memory/project_wice_setup.md](memory/project_wice_setup.md).

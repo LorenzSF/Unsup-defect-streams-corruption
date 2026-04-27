@@ -1,16 +1,18 @@
 # METHOD.md — Methodology notes for the thesis
 
 > Living document with **partial conclusions** drawn from the JobA / JobB
-> analyses. Numbers below are from the 30-cat clean JobA run, the 7-cat
-> val_defect rerun, and the single JobB run. Everything is stamped *as of*
-> 2026-04-27.
+> analyses. Numbers below are from the 30-cat clean JobA run, the
+> **19-cat JobA val_defect rerun** (2026-04-27), and the single JobB run.
+> Everything is stamped *as of* 2026-04-27.
 >
-> Important scope note: the current methodology baseline for
-> threshold-sensitive metrics (`f1`, `recall`, `precision`) is the
-> **patched splitter + `val_f1`** workflow. This now applies both to the
-> feature-based overlays and to the existing `jobA_trained` configs
-> [colab_trained.yaml](src/benchmark_AD/configs/colab_trained.yaml) /
-> [wice_trained.yaml](src/benchmark_AD/configs/wice_trained.yaml).
+> **Methodology baseline (current default):** patched splitter +
+> `val_f1` thresholding. Adopted as the project-wide default in
+> [default.yaml](src/benchmark_AD/default.yaml#L73) on 2026-04-27 after
+> the 19-cat rerun cleared the §9 decision gates of
+> [PLAN job A_analize val_defect.md](PLAN%20job%20A_analize%20val_defect.md).
+> The original feature-based and Deceuninck overlays now also use
+> `val_f1`; the `*_val_defect.yaml` overlays are kept only as historical
+> artifacts.
 >
 > Companion to [PLAN.md](PLAN.md) (project-level scope) and
 > [PLAN job A_analize val_defect.md](PLAN%20job%20A_analize%20val_defect.md)
@@ -65,27 +67,49 @@ is set on the val split during a calibration step
 
 ### Empirical evidence that calibration is the bottleneck
 
-Across the **7-category JobA val_defect rerun** (clean vs val_f1, same
-splits otherwise, single seed):
+Across the **19-category JobA val_defect rerun** (clean baseline vs the
+patched splitter + `val_f1`, same splits otherwise, single seed). Source:
+[data/outputs/jobA_val_defect_V1/_analysis/REPORT.md](data/outputs/jobA_val_defect_V1/_analysis/REPORT.md).
+Means over the 19 paired (cat, model) cells:
 
 | Model | ΔAUROC | ΔAUPR | ΔF1 | ΔRecall | ΔPrecision | mean Thr_v / Thr_c |
 |---|---:|---:|---:|---:|---:|---:|
-| PatchCore | +0.001 | −0.001 | **+0.103** | **+0.168** | −0.024 | 0.87 |
-| PaDiM | +0.004 | ±0 | **+0.295** | **+0.438** | −0.032 | **0.50** |
-| SubspaceAD | −0.001 | −0.001 | **+0.089** | **+0.152** | −0.026 | 0.87 |
+| PatchCore  | +0.003 | −0.002 | **+0.281** | **+0.381** | −0.052 | 0.91 |
+| PaDiM      | +0.012 | +0.002 | **+0.451** | **+0.560** | −0.036 | **0.66** |
+| SubspaceAD | +0.017 | +0.002 | **+0.257** | **+0.338** | −0.046 | **0.50** |
 
-**Conclusion (preliminary):** ranking quality (AUROC, AUPR) is unchanged
-by the calibration switch, as it should be. F1 and Recall jumps come
-entirely from a better operating point. PaDiM was the most miscalibrated
-(threshold ratio 0.50 → it was running at twice the optimal cut).
+**Conclusion:** ranking quality (AUROC, AUPR) is essentially unchanged by
+the calibration switch, as it should be — *means* drift inside the ±0.02
+noise band the plan tolerated. The F1/Recall jumps come entirely from a
+better operating point. PaDiM and SubspaceAD were the most miscalibrated
+(threshold ratios 0.66 and 0.50 → previous cut was at 1.5× and 2× the
+optimal).
+
+**Caveats from the rerun analysis (record but do not block the decision):**
+
+- Per-cell `|ΔAUROC|` median is 0.0145 (target was < 0.01); the drift is
+  structural — the 10% bads moved into val change the test-set
+  composition, so AUROC is computed on a different (smaller) test pool
+  than the clean baseline. Per-model means agree within ±0.02; that is
+  the meaningful signal.
+- One regression worth disclosing: `plastic_plug` × PaDiM ΔAUROC =
+  −0.096 (0.905 → 0.810). F1 still rose (0.45 → 0.87) because val_f1
+  picked a permissive threshold, but ranking quality genuinely worsened
+  on this cell. Re-run with a fresh seed before publishing the table.
+- One favourable outlier: `plastic_nut` × SubspaceAD ΔAUROC = +0.123
+  (0.73 → 0.86); likely a bad seed in the clean run.
+- Single mild F1 regression: `terminalblock` × SubspaceAD ΔF1 = −0.010
+  — the clean baseline already had R = 0.90 with the conservative
+  threshold; val_f1 picked a slightly tighter cut. Below the noise floor.
 
 ### Decision for the thesis
 
-The `val_quantile` numbers are kept only for completeness; the headline
-metrics use `val_f1` with the patched splitter in §3. The
-methodology section should explicitly state that any reported F1 / Recall
-without a documented calibration procedure is meaningless on industrial
-AD datasets.
+`val_f1` is now the project default (committed 2026-04-27). The
+`val_quantile` numbers are kept only for the calibration-evidence table
+above. The methodology section should state explicitly that any
+reported F1/Recall without a documented calibration procedure is
+meaningless on industrial AD datasets, and that the clean→val_f1 lift
+above is the empirical justification for the policy.
 
 ---
 
@@ -205,17 +229,19 @@ Per-defect recall belongs in an appendix table — too wide for the body.
 
 ## 6. Configuration matrix used in JobA / JobB
 
-All overlays inherit from [default.yaml](src/benchmark_AD/default.yaml).
+All overlays inherit from [default.yaml](src/benchmark_AD/default.yaml)
+— which now sets `thresholding.mode: val_f1` as the project default.
 Differences highlighted.
 
 | Overlay | Dataset | Format | Cameras | Threshold mode | Val split |
 |---|---|---|---|---|---|
-| [colab_featurebased.yaml](src/benchmark_AD/configs/colab_featurebased.yaml) | Real-IAD | real_iad | C1 | val_quantile (target_fpr 0.01) | goods-only val |
-| [colab_featurebased_val_defect.yaml](src/benchmark_AD/configs/colab_featurebased_val_defect.yaml) | Real-IAD | real_iad | C1 | val_f1 | goods-only val + 10% anomalies |
-| [colab_trained.yaml](src/benchmark_AD/configs/colab_trained.yaml) | Real-IAD | real_iad | C1 | val_f1 | goods-only train + val gains anomalies via patched splitter |
-| [wice_trained.yaml](src/benchmark_AD/configs/wice_trained.yaml) | Real-IAD | real_iad | C1 | val_f1 | goods-only train + val gains anomalies via patched splitter |
-| [colab_featurebased_deceuninck.yaml](src/benchmark_AD/configs/colab_featurebased_deceuninck.yaml) | Deceuninck | auto | n/a | val_quantile | goods-only val |
-| [colab_featurebased_deceuninck_val_defect.yaml](src/benchmark_AD/configs/colab_featurebased_deceuninck_val_defect.yaml) | Deceuninck | auto | n/a | val_f1 | goods-only val + 10% anomalies |
+| [default.yaml](src/benchmark_AD/default.yaml) | — | auto | all | **val_f1** (project default since 2026-04-27) | patched splitter (good train + 10% bads in val) |
+| [colab_featurebased.yaml](src/benchmark_AD/configs/colab_featurebased.yaml) | Real-IAD | real_iad | C1 | val_f1 | inherits default |
+| [colab_featurebased_val_defect.yaml](src/benchmark_AD/configs/colab_featurebased_val_defect.yaml) | Real-IAD | real_iad | C1 | val_f1 | historical alias of the line above |
+| [colab_trained.yaml](src/benchmark_AD/configs/colab_trained.yaml) | Real-IAD | real_iad | C1 | val_f1 | inherits default |
+| [wice_trained.yaml](src/benchmark_AD/configs/wice_trained.yaml) | Real-IAD | real_iad | C1 | val_f1 | inherits via colab_trained |
+| [colab_featurebased_deceuninck.yaml](src/benchmark_AD/configs/colab_featurebased_deceuninck.yaml) | Deceuninck | auto | n/a | val_f1 | inherits default |
+| [colab_featurebased_deceuninck_val_defect.yaml](src/benchmark_AD/configs/colab_featurebased_deceuninck_val_defect.yaml) | Deceuninck | auto | n/a | val_f1 | historical alias of the line above |
 
 ---
 
@@ -224,20 +250,34 @@ Differences highlighted.
 **These are not the final thesis numbers** — refresh this section after the
 next full val_defect rerun lands for both datasets.
 
-### From clean JobA (30 categories × 3 models)
+### From clean JobA (30 categories × 3 models, val_quantile baseline)
 
 - AUROC mean: PaDiM 0.893 > PatchCore 0.870 > SubspaceAD 0.842.
 - AUROC win counts: PaDiM 14 / 30, PatchCore 10 / 30, SubspaceAD 6 / 30.
 - F1/Recall numbers are not trustworthy under `val_quantile` — over-strict
   (recall 0.36 mean, 0.99 precision). See §2.
 
-### From JobA val_defect (7 of 10 categories, patched splitter + val_f1)
+### From JobA val_defect (19 categories, patched splitter + val_f1, 2026-04-27)
 
-- Calibration switch alone gives ΔF1 = +0.10 / +0.30 / +0.09 (PatchCore /
-  PaDiM / SubspaceAD), ΔRecall = +0.17 / +0.44 / +0.15. AUROC unchanged.
-- Decision gates from
-  [PLAN job A_analize val_defect.md](PLAN%20job%20A_analize%20val_defect.md) §9
-  passed → switching the project default to `val_f1` is justified.
+Headline (means over 19 paired cells; full tables under
+[data/outputs/jobA_val_defect_V1/_analysis/](data/outputs/jobA_val_defect_V1/_analysis/)):
+
+| Model | AUROC clean → vd | F1 clean → vd | Recall clean → vd | Precision clean → vd |
+|---|---|---|---|---|
+| PatchCore | 0.892 → 0.894 | 0.633 → **0.914** (+0.281) | 0.510 → **0.891** (+0.381) | 0.994 → 0.942 |
+| PaDiM | 0.897 → 0.910 | 0.485 → **0.936** (+0.451) | 0.365 → **0.925** (+0.560) | 0.986 → 0.950 |
+| SubspaceAD | 0.868 → 0.885 | 0.637 → **0.894** (+0.257) | 0.517 → **0.854** (+0.338) | 0.988 → 0.942 |
+
+- All §9 decision gates from
+  [PLAN job A_analize val_defect.md](PLAN%20job%20A_analize%20val_defect.md)
+  passed (ΔF1 ≫ 0.10 per model; AUROC means stable inside ±0.02). The
+  project default was switched to `val_f1` on 2026-04-27 in
+  [default.yaml](src/benchmark_AD/default.yaml#L73).
+- Pending before locking the thesis numbers: re-run the **11 categories
+  not yet covered** by the val_defect rerun — porcelain_doll, regulator,
+  tape, toy, toy_brick, u_block, usb, usb_adaptor, vcpill, wooden_beads,
+  woodstick. The headline table for the thesis must be over the full 30
+  cats, not the 19 we have today.
 
 ### From JobB Deceuninck (single run, val_quantile, no val balancing)
 
@@ -275,11 +315,14 @@ this kind of one-class industrial AD task.
 
 ---
 
-## 9. Current JobA/B val_defect run settings
+## 9. Current JobA/B run settings (post-2026-04-27)
 
-The active val_defect workflow uses:
+The default workflow now uses:
 
-- `thresholding.mode: val_f1`.
+- `thresholding.mode: val_f1` everywhere — set in
+  [default.yaml](src/benchmark_AD/default.yaml#L73) and inherited by all
+  overlays. The legacy `val_quantile` is reachable only by explicit
+  override.
 - The patched splitter that routes 10% of anomaly images into val while
   keeping train good-only.
 - The same per-summary fields as the clean runs, plus the industrial
@@ -289,20 +332,33 @@ The active val_defect workflow uses:
 
 Expected behaviour:
 
-- AUROC / AUPR stay essentially unchanged because ranking is unchanged.
+- AUROC / AUPR stay essentially unchanged because ranking is unchanged
+  (per-cell drift is structural, see §2 caveats).
 - Thresholds shift because val now contains both classes.
 - F1 / Recall rise when the clean baseline was over-conservative.
 - Macro recall vs weighted recall still exposes uneven per-class detection
   on imbalanced categories.
+
+Operational consequence for the HPC clone: the wICE repo must be
+`git pull`-ed before the next jobA_trained run so it picks up the new
+default. The 2026-04-27 `csflow audiojack` cell predates the merge and
+ran with `val_quantile` + `image_size: 256`; it has to be re-run after
+the pull.
 
 ---
 
 ## 10. Pointers
 
 - Operational rerun plan: [PLAN job A_analize val_defect.md](PLAN%20job%20A_analize%20val_defect.md)
+- 19-cat rerun analysis (REPORT + Tables A–D):
+  [data/outputs/jobA_val_defect_V1/_analysis/REPORT.md](data/outputs/jobA_val_defect_V1/_analysis/REPORT.md)
+- Comparison script (clean ↔ val_defect):
+  [scripts/compare_clean_vd.py](scripts/compare_clean_vd.py)
 - Project-level scope: [PLAN.md](PLAN.md)
 - Splitter implementation: [src/benchmark_AD/data.py:apply_dataset_split](src/benchmark_AD/data.py)
 - Calibrator implementation: [src/benchmark_AD/pipeline.py:_maybe_calibrate_threshold](src/benchmark_AD/pipeline.py)
 - Industrial metrics implementation: [src/benchmark_AD/pipeline.py:_recall_at_fpr](src/benchmark_AD/pipeline.py), [_per_defect_recall](src/benchmark_AD/pipeline.py)
 - Aggregator: [scripts/analyze_runs.py](scripts/analyze_runs.py) (new) and [scripts/analyze_jobA.py](scripts/analyze_jobA.py) (legacy)
+- HPC runbook (val_f1 caveats for the wICE clone):
+  [docs/HPC_KU_LEUVEN_RUNBOOK.md §5.5](docs/HPC_KU_LEUVEN_RUNBOOK.md)
 - Real-IAD layout gotchas: [memory/reference_realiad_layout.md](memory/reference_realiad_layout.md)

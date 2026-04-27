@@ -5,6 +5,12 @@
 # all 30 categories and passes each via --dataset-path. The three models
 # below are feature-based (no training epochs) so results are representative
 # with the default epoch=1 trained-model configs intentionally omitted.
+#
+# Threshold mode is val_f1 (current project default — see METHOD.md §2).
+# The patched splitter in data.py routes 10% of anomalies into val so the
+# F1 calibrator has both classes. The earlier val_defect overlay
+# (colab_featurebased_val_defect.yaml) is now functionally equivalent to
+# this file; kept around only so the prior runs are reproducible byte-for-byte.
 
 _extends: ../default.yaml
 
@@ -33,7 +39,7 @@ benchmark:
     - name: "anomalib_patchcore"
       threshold: 0.5
       thresholding:
-        mode: "val_quantile"
+        mode: "val_f1"
         target_fpr: 0.01
       anomalib:
         image_size: 512
@@ -48,7 +54,7 @@ benchmark:
     - name: "anomalib_padim"
       threshold: 0.5
       thresholding:
-        mode: "val_quantile"
+        mode: "val_f1"
         target_fpr: 0.01
       anomalib:
         image_size: 512
@@ -60,7 +66,7 @@ benchmark:
     - name: "subspacead"
       threshold: 0.5
       thresholding:
-        mode: "val_quantile"
+        mode: "val_f1"
         target_fpr: 0.01
       subspacead:
         model_ckpt: "facebook/dinov2-with-registers-large"

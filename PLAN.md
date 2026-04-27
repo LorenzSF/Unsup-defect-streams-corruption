@@ -74,24 +74,37 @@ These apply to every file touched or created in this project:
 
 ---
 
+## Status snapshot — 2026-04-27
+
+| Block | State | Notes |
+|---|---|---|
+| Pipeline + metrics | ✅ done | AUROC/AUPR, Recall@FPR=1%/5%, macro/weighted/per-defect recall, runtime cost — all in `benchmark_summary.json`. |
+| JobA clean (val_quantile) | ✅ 30 cats × 3 feature-based + partial trained | Headline numbers untrustworthy on F1/Recall; AUROC valid. |
+| **JobA val_defect (val_f1)** | ✅ 19 / 30 cats × 3 feature-based | Cleared §9 gates; default switched to `val_f1` on 2026-04-27. See [data/outputs/jobA_val_defect_V1/_analysis/REPORT.md](data/outputs/jobA_val_defect_V1/_analysis/REPORT.md). |
+| JobA val_f1 missing 11 cats | 🟡 todo | porcelain_doll, regulator, tape, toy, toy_brick, u_block, usb, usb_adaptor, vcpill, wooden_beads, woodstick. |
+| JobA trained (CSFlow/DRAEM/STFPM/RD4AD on HPC) | 🟡 partial | csflow audiojack only, *and on a pre-val_f1 clone* (image_size 256, mode=val_quantile). Re-run after `git pull` on wICE — see [docs/HPC_KU_LEUVEN_RUNBOOK.md §5.5](docs/HPC_KU_LEUVEN_RUNBOOK.md). |
+| JobB Deceuninck clean (val_quantile) | ✅ 1 cell × 3 models | AUROC ≥ 0.995 across the 3 models. |
+| **JobB Deceuninck val_f1** | 🟡 todo | Re-run with the new default. Driver: [scripts/run_jobB_val_defect_colab.sh](scripts/run_jobB_val_defect_colab.sh). |
+| Corruption module | 🟡 partial | See `src/corruptions/` — registry + tests exist; pipeline wiring + JobC pending. |
+| Streaming module + dashboard | ⛔ to build | Block 2 below. |
+| Notebook tables/plots | 🟡 partial | Tables A–D (TSV) generated under `_analysis/`; not yet imported into the notebook. |
+
+---
+
 ## Work Plan
 
 ### 1 — Benchmark + Corruptions + GPU Runs
 
-#### 1.1 — Stabilize and run batch benchmark
-**Goal:** `benchmark_summary.json` with AUROC, F1, **Recall@FPR=1%**, **macro/per-defect recall** and inference time per model, on both datasets.
+#### 1.1 — Close the headline benchmark (val_f1 default, full grid)
+**Goal:** every cell of the headline table reports AUROC, F1, **Recall@FPR=1%**, **macro/per-defect recall** and inference cost under the same `val_f1` calibration policy.
 
-- Verify `main.py` runs end-to-end with all supported models.
-- Fix any model-loading or evaluation bugs found during the run.
-- Launch on GPU cluster:
-  - **Job A:** Clean benchmark, standard dataset (Real-IAD), all models.
-  - **Job A val_defect (rerun):** Same models with `val_f1` thresholding and the patched
-    splitter that routes 10% of anomalies into val. Drives the headline F1/Recall numbers — see
-    [METHOD.md §3](METHOD.md#3-train--val--test-composition-is-the-second-dominant-axis).
-  - **Job B:** Clean benchmark, real industrial dataset (Deceuninck), all models.
-  - **Job B val_defect (new):** Same models with `val_f1` and the patched splitter. Use
-    [scripts/run_jobB_val_defect_colab.sh](scripts/run_jobB_val_defect_colab.sh).
-- After results: identify the **best-performing model** by inspecting `benchmark_summary.json` manually → this name is then passed to `runtime_main.py --model <name>` for streaming. Never auto-select.
+- ✅ Pipeline runs end-to-end on all supported models.
+- ✅ `default.yaml` now uses `val_f1`. All Job A/B configs inherit it; the `*_val_defect.yaml` overlays are kept as historical aliases.
+- 🟡 **JobA val_f1 — finish the remaining 11 cats** (porcelain_doll, regulator, tape, toy, toy_brick, u_block, usb, usb_adaptor, vcpill, wooden_beads, woodstick). Reuse [scripts/run_jobA_val_defect_colab.sh](scripts/run_jobA_val_defect_colab.sh) (or its successor) and append outputs into `data/outputs/jobA_val_defect_V1/`.
+- 🟡 **JobA trained — wICE re-run.** `git pull` on the HPC clone (so `colab_trained.yaml` picks up `val_f1` and `image_size: 512` from `default.yaml`), then re-launch `csflow audiojack` and extend to the 30 categories × 4 trained models matrix described in [HPC_KU_LEUVEN_RUNBOOK.md §6–7](docs/HPC_KU_LEUVEN_RUNBOOK.md).
+- 🟡 **JobB Deceuninck val_f1.** Re-run via [scripts/run_jobB_val_defect_colab.sh](scripts/run_jobB_val_defect_colab.sh); confirm the F1/Recall lift on Deceuninck mirrors the Real-IAD result (or document the difference if not).
+- 🟡 **Re-run regression cell.** `plastic_plug × PaDiM` showed ΔAUROC = −0.096 in the val_defect rerun; re-launch with a fresh seed to confirm whether the drop is noise or real before publishing the table.
+- After results: regenerate Tables A–D via [scripts/compare_clean_vd.py](scripts/compare_clean_vd.py) and identify the **best-performing model** by inspecting the consolidated `benchmark_summary.json` set manually → this name is then passed to `runtime_main.py --model <name>` for streaming. Never auto-select.
 
 #### 1.2 — Build corruption module
 **Goal:** `src/corruptions/corruption_registry.py` integrated into the batch pipeline.
@@ -168,16 +181,107 @@ Dashboard must show (in a single screen, readable by a factory operator):
 #### 2.3 — Results analysis and thesis writing
 **Goal:** All figures and tables needed for the thesis are generated and exported.
 
-- Update `notebooks/benchmark_graphs and tables.ipynb` with new run outputs.
+- Import the val_defect TSVs already generated into `notebooks/benchmark_graphs and tables.ipynb`:
+  - `data/outputs/jobA_val_defect_V1/_analysis/tableA_per_cat_model.tsv`
+  - `tableB_per_model.tsv`, `tableC_threshold_shift.tsv`, `tableD_val_sanity.tsv`
+- Update the notebook with the post-rerun run outputs (clean baseline + 30/30 val_f1 cells once §1.1 is closed).
 - Generate the following figures:
-  1. Model comparison table: AUROC and F1 on standard vs. industrial dataset (clean).
-  2. Robustness curves: AUROC vs. corruption severity, per corruption type (line chart).
-  3. Streaming dashboard screenshots: clean run and corrupted run side by side.
-  4. UMAP embedding plot snapshot from a streaming session (if available).
+  1. **Threshold-calibration evidence** — clean vs val_f1 per-model bar chart (F1 / Recall lift, AUROC stability). Direct support for METHOD.md §2.
+  2. **Model comparison table:** AUROC and F1 on Real-IAD (val_f1) vs Deceuninck (val_f1).
+  3. **F1 lift bar chart and PR scatter** described in [PLAN job A_analize val_defect.md §7](PLAN%20job%20A_analize%20val_defect.md).
+  4. **Robustness curves:** AUROC vs corruption severity, per corruption type (line chart, output of §1.3 / Job C).
+  5. **Streaming dashboard screenshots:** clean run and corrupted run side by side.
+  6. **UMAP embedding plot snapshot** from a streaming session (if available).
 - Export all figures at 300 DPI (`.png`) and `.pdf`.
 - Write or complete in thesis:
-  - **Methodology:** pipeline architecture, corruption module design, streaming setup.
+  - **Methodology:** pipeline architecture, threshold-calibration policy (val_f1 + patched splitter, justified in METHOD.md §2-3), corruption module design, streaming setup.
   - **Results:** model selection rationale, robustness analysis, dashboard demonstration.
+
+---
+
+## Integral action map — what's left to ship the thesis
+
+Sequenced by dependency (each block unblocks the next). Status: ✅ done · 🟡 in progress · ⛔ blocked / not started.
+
+### Phase A — Lock the headline numbers (val_f1 default)
+
+1. ✅ Switch `default.yaml` to `val_f1`. Annotate clean configs.
+2. 🟡 **JobA val_f1 — finish the 11 missing cats**
+   (porcelain_doll, regulator, tape, toy, toy_brick, u_block, usb,
+   usb_adaptor, vcpill, wooden_beads, woodstick) on Colab via
+   [scripts/run_jobA_val_defect_colab.sh](scripts/run_jobA_val_defect_colab.sh).
+   Output dir: `data/outputs/jobA_val_defect_V1/`.
+3. 🟡 **Re-run plastic_plug × PaDiM** with a fresh seed. The 19-cat rerun
+   showed ΔAUROC = −0.096 there; confirm noise vs. real regression
+   before the headline table goes into the thesis.
+4. 🟡 **JobB Deceuninck val_f1** via
+   [scripts/run_jobB_val_defect_colab.sh](scripts/run_jobB_val_defect_colab.sh).
+   Compare against the clean (val_quantile) Deceuninck baseline using
+   [scripts/compare_val_defect.py](scripts/compare_val_defect.py).
+5. 🟡 **HPC `git pull`** on `/data/leuven/.../Real-time-visual-defect-detection`,
+   then re-run `anomalib_csflow audiojack` and extend to the
+   30 cats × 4 trained models matrix. Sanity check: the resulting
+   `benchmark_summary.json` must show `threshold_mode: val_f1` and
+   `image_size: 512`.
+6. 🟡 **Regenerate Tables A–D** by re-running
+   [scripts/compare_clean_vd.py](scripts/compare_clean_vd.py) once the
+   30 cells are complete. Update
+   [data/outputs/jobA_val_defect_V1/_analysis/REPORT.md](data/outputs/jobA_val_defect_V1/_analysis/REPORT.md).
+
+### Phase B — Robustness (Job C, corruptions)
+
+7. 🟡 Finalize [src/corruptions/corruption_registry.py](src/corruptions/corruption_registry.py)
+   with the 6 functions from §1.2 and `get_corruption(name, severity)` factory.
+8. 🟡 Wire the corruption block into the pipeline (test-set only, training/val stay clean).
+9. ⛔ **Launch Job C** on GPU: 6 corruption types × {1, 3, 5} severities
+   × 3 feature-based models × Real-IAD (subset acceptable per fallback) + Deceuninck.
+10. ⛔ Aggregate Job C → robustness curves (AUROC vs severity per corruption).
+
+### Phase C — Streaming + dashboard
+
+11. ⛔ **Pick the production model** by reading the consolidated headline
+    table (do not auto-select). PaDiM is the current frontrunner on both
+    quality and cost; confirm after the 30/30 val_f1 grid is complete.
+12. ⛔ Build [src/streaming_input/](src/streaming_input/) — `app.py`,
+    `settings.py`, `inference.py` per §1.3. Wire `runtime_main.py
+    --model <name>` for manual selection.
+13. ⛔ Build [src/streaming_input/dashboard.py](src/streaming_input/dashboard.py)
+    per §2.1 (current frame + heatmap, score gauge, FPS, anomaly rate,
+    score history, live UMAP embedding).
+14. ⛔ Add `--corruption` / `--severity` to `runtime_main.py` for the
+    corrupted-stream comparison (§2.2). Capture dashboard screenshots
+    (clean + corrupted) for the thesis figures.
+
+### Phase D — Thesis figures and writing
+
+15. ⛔ Open `notebooks/benchmark_graphs and tables.ipynb`, import the
+    Phase A TSVs, and render:
+    a. Calibration evidence (clean vs val_f1).
+    b. Model comparison (Real-IAD val_f1 vs Deceuninck val_f1).
+    c. F1 lift bar chart + PR scatter per
+       [PLAN job A_analize val_defect.md §7](PLAN%20job%20A_analize%20val_defect.md).
+    d. Robustness curves from Job C.
+    e. Streaming dashboard screenshots.
+    f. UMAP embedding snapshot.
+16. ⛔ Export every figure at 300 DPI `.png` + `.pdf` per
+    [PLAN job A_analize val_defect.md §2.3](PLAN%20job%20A_analize%20val_defect.md).
+17. ⛔ Methodology chapter — pipeline architecture, val_f1 + splitter
+    policy (cite METHOD.md §2-3), corruption module design, streaming
+    setup. Limitations table from
+    [METHOD.md §8](METHOD.md#8-open-methodological-issues-limitations-to-disclose).
+18. ⛔ Results chapter — model selection rationale, headline benchmark
+    table, robustness analysis, dashboard demonstration.
+
+### Critical-path gates (block downstream phases)
+
+- **Phase A → B**: Job C corruption sweep should reuse the chosen
+  calibration (val_f1) so its numbers stack on top of Phase A's
+  headline table. Do not start Job C until §A.6 is done.
+- **Phase B → C**: streaming model selection must be informed by the
+  *robust* AUROC (degradation under corruption), not just the clean
+  AUROC. Wait until §B.10 is aggregated.
+- **Phase C → D**: dashboard screenshots are required figures (§2.1);
+  no thesis figure pass before the dashboard runs end-to-end.
 
 ---
 

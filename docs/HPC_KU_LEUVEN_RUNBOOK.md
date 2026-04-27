@@ -98,7 +98,7 @@ The four trained models in `jobA_trained` are:
 Launch (paste this on **one line** — the OnDemand terminal mangles `\` continuations):
 
 ```bash
-MODEL=anomalib_draem
+MODEL=anomalib_csflow
 uv run python main.py --config src/benchmark_AD/configs/wice_trained.yaml --model "$MODEL" --dataset-path "$DATASET_ROOT" --extract-dir "$DATASET_ROOT" --run-name "jobA_${MODEL}_${CATEGORY}"
 ```
 
@@ -204,11 +204,35 @@ Real-IAD `<category>.zip` archives contain a top-level `<category>/` folder. So:
 The current split (`train_on_good_only: true`) keeps training good-only but
 routes a `val_ratio` slice of NG samples into validation. Consequence:
 
-- `val_f1` now calibrates on both classes, which matches the current methodology baseline in [METHOD.md](../METHOD.md).
-- `val_quantile` is no longer the `jobA_trained` default.
+- `val_f1` is now the project-wide default
+  ([default.yaml](../src/benchmark_AD/default.yaml#L73)) **and** the
+  `jobA_trained` default (inherited via [colab_trained.yaml](../src/benchmark_AD/configs/colab_trained.yaml#L44)).
+- `val_quantile` is the documented baseline (kept as a `mode:` value, not
+  selected anywhere by default).
 - If a category somehow reaches validation with only one class, `val_f1` falls back to `val_quantile` (see [pipeline.py:311-345](../src/benchmark_AD/pipeline.py#L311-L345)).
 
 → **Use AUROC for cross-model comparison first**, and report F1/precision/recall as calibrated operating-point metrics under the explicit `val_f1` policy.
+
+> **Important — pull before launching.** The `csflow audiojack` run
+> dated 2026-04-27 11:18 UTC was produced on an HPC clone that pre-dated
+> the val_f1 merge — its `benchmark_summary.json` shows
+> `threshold_mode: val_quantile` and `image_size: 256`. Before re-running
+> any jobA_trained category on wICE:
+>
+> ```bash
+> cd /data/leuven/381/vsc38124/Real-time-visual-defect-detection
+> git pull
+> ```
+>
+> Then sanity-check that the live config renders val_f1:
+>
+> ```bash
+> grep -n 'mode' src/benchmark_AD/configs/colab_trained.yaml
+> # expect: ...    mode: "val_f1"
+> ```
+>
+> The `csflow audiojack` cell needs to be re-run after the pull so the
+> headline numbers are comparable to the rest of the val_f1 results.
 
 ### 5.6 Cache locations and first-run cost
 
@@ -239,7 +263,13 @@ Sitting through 120 interactive runs is impractical. Use `sbatch` for the full s
 - Wall: 8-12 h per (model × 30 categories).
 - One job per model, four jobs in parallel — they don't share GPUs.
 - The dedicated wICE driver [scripts/run_jobA_trained_wice.sh](../scripts/run_jobA_trained_wice.sh) already implements the per-category loop with `.done` markers for resumability and the correct `/scratch` + `uv` environment exports.
-- What is still missing is only the **Slurm wrapper** (`sbatch`) around that script. The batch job should call `bash scripts/run_jobA_trained_wice.sh <model> <cat1> ... <catN>` after the env exports from §2.
+- What is still missing is only the **Slurm wrapper** (`sbatch`) around that script. The batch job should call:
+
+ bash scripts/run_jobA_trained_wice.sh anomalib_csflow bottle_cap button_battery 
+
+after the env exports from §2.
+
+
 
 ---
 

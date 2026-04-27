@@ -1,7 +1,10 @@
-# Job A "val_defect" overlay — same 3 feature-based models as
-# colab_featurebased.yaml, but with thresholding.mode = "val_f1".
-# Pairs with the data.py patch that routes 10% of anomalies into val,
-# so val_f1 has both classes to fit the operating point on.
+# Job A "val_defect" overlay — historical artifact.
+#
+# After the 19-cat val_defect rerun (2026-04-27, see
+# data/outputs/jobA_val_defect_V1/_analysis/REPORT.md), val_f1 became the
+# project default. colab_featurebased.yaml itself now uses val_f1, so this
+# file is functionally equivalent to it. Kept so the earlier "val_defect"
+# bash driver and timestamps stay reproducible byte-for-byte.
 
 _extends: ../default.yaml
 

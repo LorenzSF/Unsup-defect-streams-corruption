@@ -20,7 +20,10 @@
       "Bash(PYTHONPATH=src python -m pytest tests/ -q)",
       "Bash(python scripts/analyze_runs.py --prefix jobA_val_defect_)",
       "Bash(python scripts/compare_val_defect.py)",
-      "Bash(python scripts/split_simulation.py)"
+      "Bash(python scripts/split_simulation.py)",
+      "Bash(python scripts/compare_clean_vd.py)",
+      "Bash(awk -F'\\\\t' 'BEGIN{OFS=\"\\\\t\"}{print $1,$2,\"AUROC\",$3\"->\"$4\"\\(\"$5\"\\)\",\"F1\",$9\"->\"$10\"\\(\"$11\"\\)\",\"P\",$12\"->\"$13,\"R\",$14\"->\"$15,\"thr\",$16\"->\"$17}')",
+      "Bash(awk -F'\\\\t' 'NR==1 || $1==\"plastic_plug\" || $1==\"plastic_nut\"' \"data/outputs/jobA_val_defect_V1/_analysis/tableA_per_cat_model.tsv\")"
     ]
   }
 }

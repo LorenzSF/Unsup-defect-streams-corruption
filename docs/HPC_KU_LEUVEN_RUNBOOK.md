@@ -57,7 +57,7 @@ MODEL=anomalib_csflow
 uv run python main.py --config src/benchmark_AD/configs/wice_trained.yaml --model "$MODEL" --dataset-path "$DATASET_ROOT" --extract-dir "$DATASET_ROOT" --run-name "jobA_${MODEL}_${CATEGORY}"
 
 # 6. Run the same model on several categories consecutively
-bash scripts/run_jobA_trained_wice.sh anomalib_draem audiojack bottle_cap
+bash scripts/run_jobA_trained_wice.sh rd4ad fire_hood mint mounts pcb phone_battery plastic_nut plastic_plug porcelain_doll regulator
 
 # 7. Inspect or stage the outputs
 RUN=$(ls -1dt /scratch/leuven/381/vsc38124/runs/jobA_anomalib_csflow * | head -n1)
@@ -70,6 +70,19 @@ for CATEGORY in audiojack bottle_cap button_battery; do
   rm -rf /scratch/leuven/381/vsc38124/runs/jobA_${MODEL}_${CATEGORY}_*
   rm -f /scratch/leuven/381/vsc38124/runs/.done_markers/${MODEL}__${CATEGORY}.done
 done
+
+
+# 9. Massiv copy from scratch to downlads
+mkdir -p /data/leuven/381/vsc38124/downloads
+rsync -a /scratch/leuven/381/vsc38124/runs/jobA_* /data/leuven/381/vsc38124/downloads/
+
+# 10. See the content of some folder or directory
+find /scratch/leuven/381/vsc38124/runs -maxdepth 1 -type d -name 'jobA_*' | sort
+
+# 11. Clean massive in some directory
+rm -rf /scratch/leuven/381/vsc38124/runs/jobA_*
+
+
 ```
 
 If you also want a full reset of the extracted datasets for those categories,

@@ -1,0 +1,28 @@
+# Job C (corruption robustness) — Real-IAD overlay for Colab.
+# Used by scripts/run_jobC.sh. Model is selected via --model on the CLI; the
+# corruption type and severity are passed via --corruption / --severity per
+# invocation, so this file does not pin them.
+
+_extends: ../default.yaml
+
+run:
+  run_name: "jobC_realiad"
+  output_dir: "/content/work/runs"
+
+runtime:
+  device: "auto"
+  precision: "fp32"
+  num_workers: 2
+  pin_memory: true
+  cudnn_benchmark: true
+
+dataset:
+  source_type: "folder"
+  format: "real_iad"
+  # Overridden per-category by run_jobC.sh via --dataset-path.
+  path: "/content/work/current"
+  extract_dir: "/content/work/current"
+  cameras: "C1"
+
+benchmark:
+  save_umap: false

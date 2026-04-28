@@ -1,0 +1,27 @@
+# Job C (corruption robustness) — Deceuninck overlay for Colab.
+# Used by scripts/run_jobC.sh. Single-cell dataset (no per-category loop).
+# Model and corruption are CLI overrides — see header in run_jobC.sh.
+
+_extends: ../default.yaml
+
+run:
+  run_name: "jobC_deceuninck"
+  output_dir: "/content/work/runs"
+
+runtime:
+  device: "auto"
+  precision: "fp32"
+  num_workers: 2
+  pin_memory: true
+  cudnn_benchmark: true
+
+dataset:
+  source_type: "folder"
+  format: "auto"
+  # Overridden by run_jobC.sh via --dataset-path; the "auto" loader recognises
+  # defects/ via _BAD_DIR_NAMES and uses each subfolder name as defect_type.
+  path: "/content/work/current"
+  extract_dir: "/content/work/current"
+
+benchmark:
+  save_umap: false

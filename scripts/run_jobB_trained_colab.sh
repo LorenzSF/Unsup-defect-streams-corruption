@@ -98,7 +98,10 @@ except Exception:
 gc.collect()
 try:
     from google.colab import runtime
-    runtime.unassign()
+    try:
+        runtime.unassign()
+    except Exception as exc:
+        print(f"[cleanup] runtime.unassign() skipped: {exc}")
 except Exception:
     pass
 PY

@@ -35,7 +35,8 @@
       "Bash(PYTHONPATH=src python -m pytest --version)",
       "Bash(PYTHONPATH=src .venv/Scripts/python main.py --help)",
       "Bash(chmod +x \"c:/Users/Usuario/Desktop/Thesis/Pipeline/Real-time-visual-defect-detection/scripts/run_smoke_corruption.sh\")",
-      "Bash(bash -n \"c:/Users/Usuario/Desktop/Thesis/Pipeline/Real-time-visual-defect-detection/scripts/run_smoke_corruption.sh\")"
+      "Bash(bash -n \"c:/Users/Usuario/Desktop/Thesis/Pipeline/Real-time-visual-defect-detection/scripts/run_smoke_corruption.sh\")",
+      "Bash(python notebooks/build_analyze_jobB.py)"
     ]
   }
 }

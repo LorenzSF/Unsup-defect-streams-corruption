@@ -1,241 +1,99 @@
 from __future__ import annotations
 
-import argparse
-import importlib
-import sys
+import dataclasses
+import json
+import random
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
-from benchmark_AD.models import available_models, model_dependencies
-from benchmark_AD.pipeline import load_config, run_pipeline
-from corruptions.corruption_registry import (
-    SEVERITY_LEVELS,
-    available_corruptions,
-)
+import numpy as np
 
-
-DEFAULT_CONFIG_FILE = Path("src") / "benchmark_AD" / "default.yaml"
-
-
-def _install_hint(module_name: str) -> str:
-    hints = {
-        "lightning": "lightning",
-        "lightning.pytorch": "lightning",
-        "anomalib": "anomalib",
-        "sklearn": "scikit-learn",
-        "cv2": "opencv-python",
-        "FrEIA": "FrEIA",
-        "kornia": "kornia",
-        "transformers": "transformers",
-    }
-    return hints.get(module_name, module_name.split(".", 1)[0])
+from src.benchmark import OnlineBaseline
+from src.corruption import apply_corruption
+from src.metrics import OnlineMetrics
+from src.models import build_model, warmup
+from src.schemas import RunConfig
+from src.stream import build_stream
+from src.visualization import StreamVisualizer
 
 
-def _module_issue(module_name: str) -> Optional[str]:
+def set_seeds(seed: int) -> None:
+    random.seed(seed)
+    np.random.seed(seed)
     try:
-        importlib.import_module(module_name)
-    except ModuleNotFoundError as exc:
-        missing = getattr(exc, "name", None) or module_name
-        return f"missing dependency '{missing}' (pip install {_install_hint(missing)})"
-    except Exception as exc:
-        return f"import error: {exc}"
-    return None
+        import torch
+
+        torch.manual_seed(seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(seed)
+    except ImportError:
+        pass
 
 
-def _model_preflight_checks(model_name: str) -> List[Tuple[str, Optional[str]]]:
-    return [(mod, _module_issue(mod)) for mod in model_dependencies(model_name)]
-
-
-def _model_runtime_issue(model_name: str) -> Optional[str]:
-    for module_name, issue in _model_preflight_checks(model_name):
-        if issue is not None:
-            return f"{module_name}: {issue}"
-    return None
-
-
-def _infer_source_type(path_text: str) -> str:
-    path = Path(path_text)
-    return "zip" if path.is_file() and path.suffix.lower() == ".zip" else "folder"
-
-
-def _base_model_cfg(cfg: Dict[str, Any]) -> Dict[str, Any]:
-    base = dict(cfg.get("model", {})) if isinstance(cfg.get("model"), dict) else {}
-    base.pop("name", None)
-    return base
-
-
-def _apply_single_model(cfg: Dict[str, Any], model_name: str) -> None:
-    """Pin the pipeline to a single model, preserving its per-kind sub-config.
-
-    When ``benchmark.models[]`` contains an entry matching ``model_name``,
-    that entry's full config (e.g. PaDiM-specific ``anomalib`` overrides) is
-    used as the base — otherwise the global ``cfg['model']`` block is used.
-    Without this, --model would silently drop per-model YAML overrides and
-    e.g. PaDiM would inherit PatchCore's wide_resnet50_2 backbone and OOM
-    on the covariance step.
-    """
-    base: Optional[Dict[str, Any]] = None
-    bench_models = cfg.get("benchmark", {}).get("models")
-    if isinstance(bench_models, list):
-        for m in bench_models:
-            if isinstance(m, dict) and m.get("name") == model_name:
-                base = {k: v for k, v in m.items() if k != "name"}
-                break
-    if base is None:
-        base = _base_model_cfg(cfg)
-
-    entry = {**base, "name": model_name}
-    cfg["model"] = dict(entry)
-    bench = dict(cfg.get("benchmark", {})) if isinstance(cfg.get("benchmark"), dict) else {}
-    bench["models"] = [dict(entry)]
-    cfg["benchmark"] = bench
-
-
-def _apply_all_models(cfg: Dict[str, Any]) -> List[str]:
-    """Expand benchmark.models with every registry entry that passes preflight.
-
-    Returns the list of skipped models along with the reason, so the caller can
-    surface the information in the run log without blocking the job.
-    """
-    base = _base_model_cfg(cfg)
-    entries: List[Dict[str, Any]] = []
-    skipped: List[str] = []
-    for name in available_models():
-        issue = _model_runtime_issue(name)
-        if issue is not None:
-            skipped.append(f"{name} ({issue})")
-            continue
-        entries.append({**base, "name": name})
-
-    if not entries:
-        raise RuntimeError(
-            "No models are selectable in the current environment. "
-            f"Skipped: {'; '.join(skipped) if skipped else 'none'}."
-        )
-
-    bench = dict(cfg.get("benchmark", {})) if isinstance(cfg.get("benchmark"), dict) else {}
-    bench["models"] = entries
-    cfg["benchmark"] = bench
-    return skipped
-
-
-def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(
-        description="Run the anomaly-detection benchmark pipeline."
+def save_report(report: dict[str, Any], output_dir: str, experiment_name: str) -> Path:
+    run_dir = Path(output_dir) / experiment_name
+    run_dir.mkdir(parents=True, exist_ok=True)
+    report_path = run_dir / "report.json"
+    report_path.write_text(
+        json.dumps(_jsonify(report), indent=2, sort_keys=True),
+        encoding="utf-8",
     )
-    p.add_argument(
-        "--config",
-        type=str,
-        default=str(DEFAULT_CONFIG_FILE),
-        help="Path to YAML/JSON config. May use `_extends` to overlay a base config.",
-    )
-    p.add_argument(
-        "--dataset-path",
-        type=str,
-        default=None,
-        help="Override for cfg['dataset']['path'] (folder or .zip).",
-    )
-    p.add_argument(
-        "--extract-dir",
-        type=str,
-        default=None,
-        help="Override for cfg['dataset']['extract_dir'] (ZIP datasets only).",
-    )
-    p.add_argument(
-        "--model",
-        type=str,
-        default=None,
-        help="Pin the run to a single registered model (e.g. anomalib_patchcore).",
-    )
-    p.add_argument(
-        "--all-models",
-        action="store_true",
-        help="Benchmark every registered model that passes dependency preflight.",
-    )
-    p.add_argument(
-        "--run-name",
-        type=str,
-        default=None,
-        help="Override cfg['run']['run_name']; shapes the output subdir name.",
-    )
-    p.add_argument(
-        "--seed",
-        type=int,
-        default=None,
-        help="Override cfg['run']['seed']. Reseeds numpy and the dataset splitter.",
-    )
-    p.add_argument(
-        "--corruption",
-        type=str,
-        default=None,
-        choices=list(available_corruptions()),
-        help="Apply this corruption to test images. Enables cfg['corruption'].",
-    )
-    p.add_argument(
-        "--severity",
-        type=int,
-        default=None,
-        choices=list(SEVERITY_LEVELS),
-        help="Severity (1..5) used when --corruption is set or in the config.",
-    )
-    return p.parse_args()
+    return report_path
+
+
+def _jsonify(value: Any) -> Any:
+    if dataclasses.is_dataclass(value):
+        return {k: _jsonify(v) for k, v in dataclasses.asdict(value).items()}
+    if isinstance(value, dict):
+        return {str(k): _jsonify(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_jsonify(v) for v in value]
+    if isinstance(value, np.ndarray):
+        return value.tolist()
+    if isinstance(value, np.floating):
+        return float(value)
+    if isinstance(value, np.integer):
+        return int(value)
+    return value
 
 
 def main() -> None:
-    args = parse_args()
+    cfg = RunConfig.from_yaml("config.yaml")
+    print(f"[main] experiment={cfg.experiment_name} seed={cfg.seed}")
 
-    if args.model and args.all_models:
-        raise SystemExit("Use --model or --all-models, not both.")
+    set_seeds(cfg.seed)
 
-    cfg = load_config(Path(args.config))
-    cfg.setdefault("dataset", {})
-    cfg.setdefault("run", {})
+    stream = build_stream(cfg.stream)
+    model = build_model(cfg.model)
 
-    if args.dataset_path is not None:
-        cfg["dataset"]["path"] = args.dataset_path
-        cfg["dataset"]["source_type"] = _infer_source_type(args.dataset_path)
-    if args.extract_dir is not None:
-        cfg["dataset"]["extract_dir"] = args.extract_dir
-    if args.run_name is not None:
-        cfg["run"]["run_name"] = args.run_name
-    if args.seed is not None:
-        cfg["run"]["seed"] = args.seed
+    print("[main] warming up model...")
+    warmup_stream = build_stream(cfg.stream)
+    if not cfg.warmup.use_clean_frames:
+        warmup_stream = apply_corruption(warmup_stream, cfg.corruption)
+    warmup(model, warmup_stream, cfg.warmup)
 
-    # CLI corruption flags override the YAML; passing --corruption alone enables
-    # the section, passing --severity alone tweaks the configured corruption.
-    if args.corruption is not None or args.severity is not None:
-        corr = dict(cfg.get("corruption", {}))
-        if args.corruption is not None:
-            corr["type"] = args.corruption
-            corr["enabled"] = True
-        if args.severity is not None:
-            corr["severity"] = args.severity
-        corr.setdefault("enabled", True)
-        cfg["corruption"] = corr
+    metrics = OnlineMetrics(cfg.metrics)
+    viz = StreamVisualizer(cfg.visualization)
+    baseline = OnlineBaseline(cfg.benchmark) if cfg.benchmark.enabled else None
 
-    dataset_path = cfg["dataset"].get("path")
-    if dataset_path is None:
-        raise SystemExit(
-            "dataset.path is not set. Provide it in the config or via --dataset-path."
-        )
-    if not Path(str(dataset_path)).expanduser().exists():
-        raise SystemExit(f"Dataset path not found: {dataset_path}")
+    corrupted = apply_corruption(stream, cfg.corruption)
 
-    if args.all_models:
-        skipped = _apply_all_models(cfg)
-        if skipped:
-            print("[main] Skipped unavailable models: " + "; ".join(skipped), file=sys.stderr)
-    elif args.model is not None:
-        if args.model not in available_models():
-            supported = ", ".join(available_models())
-            raise SystemExit(f"Unknown model '{args.model}'. Supported: {supported}.")
-        issue = _model_runtime_issue(args.model)
-        if issue is not None:
-            raise SystemExit(f"Model '{args.model}' preflight failed: {issue}.")
-        _apply_single_model(cfg, args.model)
+    print("[main] starting streaming inference loop")
+    for frame in corrupted:
+        pred = model.predict(frame)
+        metrics.update(frame, pred)
+        viz.render(frame, pred, metrics.snapshot())
+        if baseline is not None:
+            baseline.update(frame, pred)
+        if frame.index % cfg.log_every == 0:
+            print(f"[step {frame.index}] {metrics.snapshot()}")
 
-    out_dir = run_pipeline(cfg)
-    print(f"Run complete. Outputs saved to: {out_dir}")
+    report = metrics.finalize()
+    if baseline is not None:
+        report["baseline"] = baseline.snapshot()
+    report_path = save_report(report, cfg.output_dir, cfg.experiment_name)
+    viz.close()
+    print(f"[main] done: {report_path}")
 
 
 if __name__ == "__main__":

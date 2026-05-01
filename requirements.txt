@@ -1,0 +1,9 @@
+numpy
+PyYAML
+Pillow
+opencv-python
+scikit-learn
+scipy
+anomalib
+transformers
+FrEIA

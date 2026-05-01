@@ -1,48 +1,21 @@
-# Local dataset and output artifacts
 data/
-data/outputs/
-data/Deceuninck_dataset/
-data/Real-IAD_dataset/
-*.bmp
-*.png
-*.jpg
-*.jpeg
-*.mp4
-*.avi
+outputs/
+checkpoints/
 
-# Python cache / test cache
 __pycache__/
 *.pyc
 .pytest_cache/
 *.egg-info/
 
-# Local environments
 .venv/
 .env
 
-# Model checkpoints / weights
 *.pt
 *.ckpt
 *.pth
 
-# Docker build artifacts
-.docker/
-*.dockerbuild
-Dockerfile
-docker-compose*.yml
-
-# Local workspace / notes
 .claude/
 .vscode/
-docs/
 memory/
-METHOD*
-*PLAN*
 
-# Execution with online hardware GPUs
-notebooks/*colab*.ipynb
-scripts/*colab*.sh
-scripts/*wice*.sh
-scripts/run_jobC.sh
-!notebooks/run_streaming_colab.ipynb
-!scripts/run_streaming_colab.sh
+PLAN.md

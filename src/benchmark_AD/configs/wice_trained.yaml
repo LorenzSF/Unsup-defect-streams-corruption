@@ -1,8 +1,0 @@
-_extends: ./colab_trained.yaml
-
-run:
-  run_name: "jobA_trained_wice"
-  output_dir: "/scratch/leuven/381/vsc38124/runs"
-
-runtime:
-  num_workers: 4   # A100 node has more cores than Colab; 4 is safe with 1 GPU

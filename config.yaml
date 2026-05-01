@@ -1,0 +1,41 @@
+experiment_name: pca_realiad_audiojack_jpeg_s3
+seed: 42
+output_dir: outputs/
+log_every: 50
+
+stream:
+  dataset: real_iad
+  category: audiojack
+  split: full        
+  shuffle: true
+  max_frames: null   # null = full stream
+
+warmup:
+  warmup_steps: 200
+  use_clean_frames: true   # warm up before corruption is applied
+
+model:
+  name: pca                
+  backbone: ''             
+  device: cpu             
+  checkpoint: null
+
+corruption:
+  enabled: true
+  specs:
+    - kind: jpeg_compression
+      severity: 3
+      probability: 1.0
+
+metrics:
+  window_size: 500
+
+visualization:
+  mode: file        # window | file | none
+  every_n_frames: 10
+  overlay_alpha: 0.5
+
+benchmark:
+  enabled: true
+  baseline: online_autoencoder
+  learning_rate: 1.0e-4

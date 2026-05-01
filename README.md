@@ -1,23 +1,89 @@
 # Evaluation of Unsupervised Defect Detection Models on Industrial Data Streams Under Corruption
 
-Thesis pipeline backing the work above: from offline benchmarking of unsupervised AD models, through synthetic corruption stress-testing, to a live streaming-inference dashboard suitable for a factory operator.
 
-## Integral View
+## Goals
 
-- One end-to-end loop: **train/calibrate → benchmark → stress-test under corruption → stream the chosen model with an XAI dashboard**.
-- A single config schema (`src/benchmark_AD/default.yaml` + per-dataset overlays) drives every stage so clean, corrupted, and streaming runs share the same preprocessing, splits, and thresholding policy.
-- Artifacts produced by the batch benchmark (`benchmark_summary.json`, model weights/state) are the same artifacts consumed by the streaming app — no re-training, no schema drift.
-- Two entry points:
-  - [main.py](main.py) — batch benchmark (clean or corrupted).
-  - [runtime_main.py](runtime_main.py) — streaming inference + live dashboard.
+1. Streaming inference and visualization for industrial image streams.
+2. Benchmarking a main detector against an online baseline on the same stream.
+3. Measuring robustness under synthetic image corruptions.
 
-## Sections of Work
+## Install
 
-The pipeline is split into three independent modules under [src/](src/). Each module ships its own README explaining how it works, what to configure, and why.
+```bash
+pip install -r requirements.txt
+```
 
-- **Benchmarking pipeline** — reproducible offline evaluation of SOTA unsupervised AD models on Real-IAD and Deceuninck → [src/benchmark_AD/README.md](src/benchmark_AD/README.md).
-- **Corruption robustness** — synthetic image corruptions injected into the test set to measure degradation curves → [src/corruptions/README.md](src/corruptions/README.md).
-- **Streaming inference + XAI dashboard** — per-frame inference loop and live operator panel reusing a benchmark-trained model → [src/streaming_input/README.md](src/streaming_input/README.md).
+`anomalib` pulls the heavy model stack used by the pipeline. If you need a
+specific CUDA build, install the matching `torch` / `torchvision` pair first
+and then install `requirements.txt`.
+
+## Data Layout
+
+The active stream loader expects extracted Real-IAD categories under:
+
+```text
+data/
+  NAME_dataset/
+      Category of the piece/
+        OK/
+            img1.jpg
+        NG/
+          Defect name/
+              img1.jpg
+```
+
+Rules:
+
+- `stream.category` must match the category directory name.
+- Normal frames live under `OK/`.
+- Anomalous frames live under `NG/<defect_name>/`.
+- Images are discovered recursively.
+- Only `.jpg` and `.jpeg` files are streamed.
+
+## Config
+Main sections:
+
+- `experiment_name`, `seed`, `output_dir`, `log_every`
+- `stream`: dataset, category, split, shuffle, max_frames
+- `warmup`: warmup_steps, use_clean_frames
+- `model`: name, backbone, device, checkpoint
+- `corruption`: enabled, specs
+- `metrics`: window_size
+- `visualization`: mode, every_n_frames, overlay_alpha
+- `benchmark`: enabled, baseline, learning_rate
+
+Current implementation notes:
+
+- `stream.dataset` must currently be `real_iad`.
+- `model.name` supports `pca`, `patchcore`, `padim`, `subspacead`, `stfpm`, `csflow`, `draem`, `rd4ad`, and `efficientad`.
+- `efficientad` currently expects `model.checkpoint` to point to trained weights.
+- `visualization.mode: file` is the default path.
+
+## Run
+
+```bash
+python main.py
+```
+
+Reports are written under `outputs/<experiment_name>/report.json`.
+
+Rendered frames from `visualization.mode: file` are written directly under `outputs/`.
+
+## Active Modules
+
+- [src/schemas.py](src/schemas.py) — dataclasses and strict config loading
+- [src/stream.py](src/stream.py) — Dataset input stream construction
+- [src/models.py](src/models.py) — model construction and warm-up
+- [src/corruption.py](src/corruption.py) — per-frame corruptions
+- [src/metrics.py](src/metrics.py) — online metrics
+- [src/visualization.py](src/visualization.py) — streaming outputs
+- [src/benchmark.py](src/benchmark.py) — online baseline
+
+## Extending
+
+To add a model, extend the dispatch in [src/models.py](src/models.py).
+
+To add a corruption, register a new kernel in [src/corruption.py](src/corruption.py).
 
 ## License
 

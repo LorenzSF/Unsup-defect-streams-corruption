@@ -3,12 +3,12 @@ from __future__ import annotations
 import math
 import time
 from pathlib import Path
-from typing import Any, Callable, Iterator, List, Optional, Protocol, Sequence, runtime_checkable
+from typing import Any, Callable, Optional, Protocol, Sequence, runtime_checkable
 
 import numpy as np
 from PIL import Image
 
-from .schemas import Frame, ModelConfig, Prediction, WarmupConfig
+from .schemas import Frame, ModelConfig, Prediction
 
 
 @runtime_checkable
@@ -41,24 +41,6 @@ def build_model(cfg: ModelConfig) -> Model:
         "reverse_distillation, efficientad"
     )
     raise ValueError(f"unknown model '{cfg.name}' (supported: {supported})")
-
-
-def warmup(model: Model, stream: Iterator[Frame], cfg: WarmupConfig) -> None:
-    if not hasattr(model, "fit_warmup"):
-        raise TypeError(f"model {type(model).__name__} has no fit_warmup() method")
-
-    frames: List[Frame] = []
-    for i, frame in enumerate(stream):
-        if i >= cfg.warmup_steps:
-            break
-        frames.append(frame)
-    if not frames:
-        raise RuntimeError("no frames available for warmup")
-    if len(frames) < cfg.warmup_steps:
-        raise RuntimeError(
-            f"warmup requires {cfg.warmup_steps} frames, got only {len(frames)}"
-        )
-    model.fit_warmup(frames)
 
 
 def _require_torch():

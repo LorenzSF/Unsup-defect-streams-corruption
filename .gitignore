@@ -1,3 +1,4 @@
+# Big archives that contain dataset and outputs of experiments.
 data/
 outputs/
 checkpoints/
@@ -18,4 +19,7 @@ __pycache__/
 .vscode/
 memory/
 
+# Internal files to develop the pipeline:
 PLAN.md
+ARCHITECTURE.md
+BEST_PRACTICES.md

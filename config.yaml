@@ -1,12 +1,14 @@
-experiment_name: pca_realiad_audiojack_jpeg_s3
 seed: 42
-output_dir: outputs/
+output_dir: C:/Users/Usuario/Desktop/Thesis/Pipeline/Real-time-visual-defect-detection/data/outputs
 log_every: 50
 
 stream:
   dataset: real_iad
   category: audiojack
-  split: full        
+  data_root: data/Real-IAD_dataset/realiad_1024
+  extensions:
+    - .jpg
+    - .jpeg
   shuffle: true
   max_frames: null   # null = full stream
 
@@ -29,6 +31,9 @@ corruption:
 
 metrics:
   window_size: 500
+  threshold_mode: manual    # manual | quantile
+  manual_threshold: 0.5     # used only when threshold_mode == manual
+  threshold_quantile: 1.0   # used only when threshold_mode == quantile (1.0 = max OK score)
 
 visualization:
   mode: file        # window | file | none

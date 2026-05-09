@@ -43,21 +43,26 @@ Rules:
 ## Config
 Main sections:
 
-- `experiment_name`, `seed`, `output_dir`, `log_every`
-- `stream`: dataset, category, split, shuffle, max_frames
+- `seed`, `output_dir`, `log_every`
+- `stream`: dataset, category, data_root, extensions, shuffle, max_frames
 - `warmup`: warmup_steps, use_clean_frames
 - `model`: name, backbone, device, checkpoint
 - `corruption`: enabled, specs
-- `metrics`: window_size
+- `metrics`: window_size, threshold_mode, manual_threshold, threshold_quantile
 - `visualization`: mode, every_n_frames, overlay_alpha
 - `benchmark`: enabled, baseline, learning_rate
 
 Current implementation notes:
 
-- `stream.dataset` must currently be `real_iad`.
+- `stream.dataset` is a free-form dataset name used in the output dir;
+  any dataset under `stream.data_root/<category>/{OK,NG}/...` works.
 - `model.name` supports `pca`, `patchcore`, `padim`, `subspacead`, `stfpm`, `csflow`, `draem`, `rd4ad`, and `efficientad`.
 - `efficientad` currently expects `model.checkpoint` to point to trained weights.
 - `visualization.mode: file` is the default path.
+- `metrics.threshold_mode` currently supports `manual` and `quantile`.
+- `quantile` re-scores the warm-up OK frames after fit and sets the
+  threshold to `np.quantile(scores, metrics.threshold_quantile)`. The
+  default `threshold_quantile: 1.0` uses the max OK score (strict).
 
 ## Run
 
@@ -65,9 +70,20 @@ Current implementation notes:
 python main.py
 ```
 
-Reports are written under `outputs/<experiment_name>/report.json`.
+Reports are written under `output_dir/<experiment_name>/report.json`. The
+experiment name is derived per run from
+`{model.name}_{stream.dataset}_{stream.category}_{corruption_kind}_s{severity}_{YYYYMMDD-HHMMSS}`,
+omitting the corruption block when `corruption.enabled` is false.
 
-Rendered frames from `visualization.mode: file` are written directly under `outputs/`.
+Current per-run report fields include:
+
+- image-level quality: `auroc`, `aupr`, `precision`, `recall`, `f1`, `accuracy`
+- operational: `mean_latency_ms`, `p95_latency_ms`, `throughput_fps`
+- setup/runtime: `runtime.cold_start_s`, `runtime.peak_vram_mb`
+- threshold metadata: `threshold.mode`, `threshold.threshold`
+
+Rendered frames from `visualization.mode: file` are written into the same
+per-run directory as the report: `output_dir/<experiment_name>/`.
 
 ## Active Modules
 

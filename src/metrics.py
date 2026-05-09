@@ -4,6 +4,7 @@ from collections import deque
 from typing import Deque
 
 import numpy as np
+from sklearn.metrics import average_precision_score, roc_auc_score
 
 from .schemas import Frame, MetricsConfig, MetricSnapshot, Prediction
 
@@ -11,9 +12,22 @@ from .schemas import Frame, MetricsConfig, MetricSnapshot, Prediction
 class OnlineMetrics:
     def __init__(self, cfg: MetricsConfig) -> None:
         self.cfg = cfg
+        self._threshold = (
+            cfg.threshold_value
+            if cfg.threshold_value is not None
+            else cfg.manual_threshold
+        )
+        if self._threshold is None:
+            raise ValueError(
+                "OnlineMetrics requires MetricsConfig.threshold_value or "
+                "MetricsConfig.manual_threshold to be set"
+            )
         self._scores: Deque[float] = deque(maxlen=cfg.window_size)
         self._labels: Deque[int] = deque(maxlen=cfg.window_size)
         self._global_auroc = _HistogramAUROC()
+        self._all_scores: list[float] = []
+        self._all_labels: list[int] = []
+        self._n_nonfinite_scores = 0
 
         # global running counts
         self._n_seen = 0
@@ -41,9 +55,14 @@ class OnlineMetrics:
 
         # only labelled frames contribute to AUROC / F1
         if frame.label in (0, 1):
-            self._scores.append(pred.score)
-            self._labels.append(frame.label)
-            self._global_auroc.add(pred.score, frame.label)
+            if np.isfinite(pred.score):
+                self._scores.append(float(pred.score))
+                self._labels.append(frame.label)
+                self._global_auroc.add(pred.score, frame.label)
+                self._all_scores.append(float(pred.score))
+                self._all_labels.append(frame.label)
+            else:
+                self._n_nonfinite_scores += 1
 
         self._lat_sum += pred.latency_ms
         self._lat_n += 1
@@ -53,7 +72,7 @@ class OnlineMetrics:
     def snapshot(self) -> MetricSnapshot:
         window_auroc = _auroc(self._scores, self._labels)
         global_auroc = self._global_auroc.value()
-        f1 = _best_f1(self._scores, self._labels)
+        _, _, f1, _ = _binary_metrics(self._scores, self._labels, self._threshold)
         mean_lat = self._lat_sum / self._lat_n if self._lat_n else 0.0
         p95 = self._p95.value()
 
@@ -75,17 +94,33 @@ class OnlineMetrics:
 
     def finalize(self) -> dict:
         snap = self.snapshot()
+        scores = np.asarray(self._all_scores, dtype=np.float64)
+        labels = np.asarray(self._all_labels, dtype=np.int64)
+        precision, recall, f1, accuracy = _binary_metrics(
+            scores, labels, self._threshold
+        )
+        auroc = _exact_auroc(scores, labels)
+        aupr = _exact_aupr(scores, labels)
         return {
             "n_seen": snap.n_seen,
             "n_anomalies": snap.n_anomalies,
-            "auroc": snap.auroc,
+            "n_scored": int(labels.size),
+            "n_nonfinite_scores": self._n_nonfinite_scores,
+            "auroc": auroc,
+            "aupr": aupr,
             "window_auroc": _auroc(self._scores, self._labels),
             "global_auroc": self._global_auroc.value(),
-            "f1": snap.f1,
+            "precision": precision,
+            "recall": recall,
+            "f1": f1,
+            "accuracy": accuracy,
             "mean_latency_ms": snap.mean_latency_ms,
             "p95_latency_ms": snap.p95_latency_ms,
             "throughput_fps": snap.throughput_fps,
             "window_size": self.cfg.window_size,
+            "threshold_mode": self.cfg.threshold_mode,
+            "threshold_used": self._threshold,
+            "threshold_quantile": self.cfg.threshold_quantile,
         }
 
 
@@ -116,24 +151,35 @@ def _auroc(scores, labels) -> float:
     return float((sum_ranks_pos - n_pos * (n_pos + 1) / 2) / (n_pos * n_neg))
 
 
-def _best_f1(scores, labels) -> float:
-    """F1 at the threshold that maximizes it on the sliding window."""
+def _binary_metrics(scores, labels, threshold: float) -> tuple[float, float, float, float]:
     if len(scores) == 0:
-        return float("nan")
+        return float("nan"), float("nan"), float("nan"), float("nan")
     s = np.asarray(scores, dtype=np.float64)
     y = np.asarray(labels, dtype=np.int64)
-    n_pos = int((y == 1).sum())
-    if n_pos == 0 or n_pos == len(y):
+    if y.size == 0 or len(np.unique(y)) < 2:
+        return float("nan"), float("nan"), float("nan"), float("nan")
+    pred = (s >= float(threshold)).astype(np.int64)
+    tp = int(np.sum((pred == 1) & (y == 1)))
+    fp = int(np.sum((pred == 1) & (y == 0)))
+    fn = int(np.sum((pred == 0) & (y == 1)))
+    tn = int(np.sum((pred == 0) & (y == 0)))
+    precision = tp / max(tp + fp, 1)
+    recall = tp / max(tp + fn, 1)
+    f1 = 2 * precision * recall / max(precision + recall, 1e-12)
+    accuracy = (tp + tn) / max(tp + tn + fp + fn, 1)
+    return float(precision), float(recall), float(f1), float(accuracy)
+
+
+def _exact_auroc(scores: np.ndarray, labels: np.ndarray) -> float:
+    if scores.size == 0 or len(np.unique(labels)) < 2:
         return float("nan")
-    order = np.argsort(-s, kind="mergesort")
-    y_s = y[order]
-    tp = np.cumsum(y_s == 1)
-    fp = np.cumsum(y_s == 0)
-    fn = n_pos - tp
-    precision = tp / np.maximum(tp + fp, 1)
-    recall = tp / np.maximum(tp + fn, 1)
-    f1 = 2 * precision * recall / np.maximum(precision + recall, 1e-12)
-    return float(f1.max())
+    return float(roc_auc_score(labels, scores))
+
+
+def _exact_aupr(scores: np.ndarray, labels: np.ndarray) -> float:
+    if scores.size == 0 or len(np.unique(labels)) < 2:
+        return float("nan")
+    return float(average_precision_score(labels, scores))
 
 
 class _HistogramAUROC:

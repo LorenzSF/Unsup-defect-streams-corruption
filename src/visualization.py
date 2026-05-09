@@ -7,13 +7,13 @@ from .schemas import Frame, MetricSnapshot, Prediction, VizConfig
 
 
 class StreamVisualizer:
-    def __init__(self, cfg: VizConfig) -> None:
+    def __init__(self, cfg: VizConfig, out_dir: Path) -> None:
         if cfg.mode not in {"file", "window", "none"}:
             raise ValueError(
                 f"viz mode must be 'file' | 'window' | 'none', got {cfg.mode!r}"
             )
         self.cfg = cfg
-        self._out_dir = Path("outputs")
+        self._out_dir = out_dir
         self._window_open = False
         self._counter = 0
         if self.cfg.mode == "file":

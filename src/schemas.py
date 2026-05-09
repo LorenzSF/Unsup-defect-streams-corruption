@@ -10,7 +10,6 @@ import yaml
 class Frame:
     image: np.ndarray
     label: int
-    mask: Optional[np.ndarray]
     timestamp: float
     source_id: str
     index: int
@@ -58,7 +57,8 @@ class CorruptionSpec:
 class StreamConfig:
     dataset: str
     category: str
-    split: str
+    data_root: str
+    extensions: List[str]
     shuffle: bool
     max_frames: Optional[int]
 
@@ -67,6 +67,16 @@ class StreamConfig:
             raise ValueError("StreamConfig.dataset must be non-empty")
         if not self.category:
             raise ValueError("StreamConfig.category must be non-empty")
+        if not self.data_root:
+            raise ValueError("StreamConfig.data_root must be non-empty")
+        if not self.extensions:
+            raise ValueError("StreamConfig.extensions must be non-empty")
+        for ext in self.extensions:
+            if not ext.startswith("."):
+                raise ValueError(
+                    "StreamConfig.extensions: each entry must start with '.', "
+                    f"got {ext!r}"
+                )
         if self.max_frames is not None and self.max_frames <= 0:
             raise ValueError(
                 f"StreamConfig.max_frames must be > 0 when set, got {self.max_frames}"
@@ -112,11 +122,40 @@ class CorruptionConfig:
 @dataclass(frozen=True)
 class MetricsConfig:
     window_size: int
+    threshold_mode: str = "manual"
+    manual_threshold: Optional[float] = 0.5
+    threshold_quantile: float = 1.0
+    threshold_value: Optional[float] = 0.5
 
     def __post_init__(self) -> None:
         if self.window_size <= 0:
             raise ValueError(
                 f"MetricsConfig.window_size must be > 0, got {self.window_size}"
+            )
+        if self.threshold_mode not in {"manual", "quantile"}:
+            raise ValueError(
+                "MetricsConfig.threshold_mode must be one of "
+                f"'manual', 'quantile', got {self.threshold_mode!r}"
+            )
+        if self.threshold_mode == "manual" and self.manual_threshold is None:
+            raise ValueError(
+                "MetricsConfig.manual_threshold must be set when "
+                "threshold_mode == 'manual'"
+            )
+        if not 0.0 <= self.threshold_quantile <= 1.0:
+            raise ValueError(
+                "MetricsConfig.threshold_quantile must be in 0..1, "
+                f"got {self.threshold_quantile}"
+            )
+        if self.manual_threshold is not None and not np.isfinite(self.manual_threshold):
+            raise ValueError(
+                "MetricsConfig.manual_threshold must be finite when set, "
+                f"got {self.manual_threshold}"
+            )
+        if self.threshold_value is not None and not np.isfinite(self.threshold_value):
+            raise ValueError(
+                "MetricsConfig.threshold_value must be finite when set, "
+                f"got {self.threshold_value}"
             )
 
 
@@ -162,7 +201,6 @@ class BenchmarkConfig:
 
 @dataclass
 class RunConfig:
-    experiment_name: str
     seed: int
     output_dir: str
     log_every: int
@@ -175,8 +213,6 @@ class RunConfig:
     benchmark: BenchmarkConfig
 
     def __post_init__(self) -> None:
-        if not self.experiment_name:
-            raise ValueError("RunConfig.experiment_name must be non-empty")
         if not self.output_dir:
             raise ValueError("RunConfig.output_dir must be non-empty")
         if self.log_every <= 0:

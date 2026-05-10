@@ -124,28 +124,24 @@ class MetricsConfig:
     window_size: int
     threshold_mode: str = "manual"
     manual_threshold: Optional[float] = 0.5
-    threshold_quantile: float = 1.0
     threshold_value: Optional[float] = 0.5
+    calibration_ok: int = 0
+    calibration_ng: int = 0
 
     def __post_init__(self) -> None:
         if self.window_size <= 0:
             raise ValueError(
                 f"MetricsConfig.window_size must be > 0, got {self.window_size}"
             )
-        if self.threshold_mode not in {"manual", "quantile"}:
+        if self.threshold_mode not in {"manual", "f1_optimal"}:
             raise ValueError(
                 "MetricsConfig.threshold_mode must be one of "
-                f"'manual', 'quantile', got {self.threshold_mode!r}"
+                f"'manual', 'f1_optimal', got {self.threshold_mode!r}"
             )
         if self.threshold_mode == "manual" and self.manual_threshold is None:
             raise ValueError(
                 "MetricsConfig.manual_threshold must be set when "
                 "threshold_mode == 'manual'"
-            )
-        if not 0.0 <= self.threshold_quantile <= 1.0:
-            raise ValueError(
-                "MetricsConfig.threshold_quantile must be in 0..1, "
-                f"got {self.threshold_quantile}"
             )
         if self.manual_threshold is not None and not np.isfinite(self.manual_threshold):
             raise ValueError(
@@ -157,6 +153,33 @@ class MetricsConfig:
                 "MetricsConfig.threshold_value must be finite when set, "
                 f"got {self.threshold_value}"
             )
+        if self.calibration_ok < 0:
+            raise ValueError(
+                "MetricsConfig.calibration_ok must be >= 0, "
+                f"got {self.calibration_ok}"
+            )
+        if self.calibration_ng < 0:
+            raise ValueError(
+                "MetricsConfig.calibration_ng must be >= 0, "
+                f"got {self.calibration_ng}"
+            )
+        if self.threshold_mode == "f1_optimal":
+            if self.calibration_ok <= 0 or self.calibration_ng <= 0:
+                raise ValueError(
+                    "MetricsConfig.threshold_mode == 'f1_optimal' requires "
+                    "calibration_ok > 0 and calibration_ng > 0; got "
+                    f"calibration_ok={self.calibration_ok}, "
+                    f"calibration_ng={self.calibration_ng}"
+                )
+        else:
+            if self.calibration_ok != 0 or self.calibration_ng != 0:
+                raise ValueError(
+                    "MetricsConfig.calibration_ok / calibration_ng are only "
+                    f"meaningful when threshold_mode == 'f1_optimal'; got "
+                    f"threshold_mode={self.threshold_mode!r} with "
+                    f"calibration_ok={self.calibration_ok}, "
+                    f"calibration_ng={self.calibration_ng}"
+                )
 
 
 @dataclass(frozen=True)

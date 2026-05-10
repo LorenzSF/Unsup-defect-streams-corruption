@@ -14,8 +14,8 @@ def build_warmup_stream(cfg: StreamConfig, warmup_steps: int) -> Iterator[Frame]
     """Yield up to `warmup_steps` OK frames, randomly chosen.
 
     Used to bootstrap the model's normal-data state. Only OK frames are
-    returned; NG frames are reserved for the inference stream so warmup
-    fits on uncontaminated data.
+    returned; NG frames are reserved for the calibration / inference
+    streams so warmup fits on uncontaminated data.
     """
     ok_entries, _ = _discover_ok_ng(cfg)
     if not ok_entries:
@@ -29,22 +29,88 @@ def build_warmup_stream(cfg: StreamConfig, warmup_steps: int) -> Iterator[Frame]
     yield from _yield_frames(selected)
 
 
-def build_stream(cfg: StreamConfig, warmup_steps: int) -> Iterator[Frame]:
-    """Yield the inference stream: remaining OK + all NG, mixed.
+def build_calibration_stream(
+    cfg: StreamConfig,
+    warmup_steps: int,
+    calibration_ok: int,
+    calibration_ng: int,
+) -> Iterator[Frame]:
+    """Yield a held-out OK + NG calibration set, disjoint from warmup and test.
 
-    The first `warmup_steps` random OK frames are excluded (they go to
-    `build_warmup_stream`). The rest is shuffled together so OK and NG
-    frames are interleaved. `cfg.max_frames` truncates the final list.
+    Reserves the OK frames at positions ``[warmup_steps : warmup_steps +
+    calibration_ok]`` of the seeded shuffle, plus the first
+    ``calibration_ng`` NG frames of the seeded NG shuffle (NGs are sampled
+    across all defect folders by virtue of `_discover_ok_ng` aggregating
+    every `NG/<defect>/`). The combined list is then shuffled so OK and
+    NG frames are interleaved when consumed.
+
+    Determinism: callers must `set_seeds(cfg.seed)` before invoking, and
+    every other stream builder that runs in the same `cfg.seed` epoch
+    must perform the exact same sequence of `random.shuffle` calls so the
+    three splits stay aligned. See `build_stream` for the matching
+    counterpart that skips this calibration prefix.
+    """
+    if calibration_ok <= 0 or calibration_ng <= 0:
+        raise ValueError(
+            "build_calibration_stream requires calibration_ok > 0 and "
+            f"calibration_ng > 0, got {calibration_ok=}, {calibration_ng=}"
+        )
+    ok_entries, ng_entries = _discover_ok_ng(cfg)
+    if cfg.shuffle:
+        random.shuffle(ok_entries)
+        random.shuffle(ng_entries)
+    if len(ok_entries) < warmup_steps + calibration_ok:
+        raise FileNotFoundError(
+            f"need {warmup_steps + calibration_ok} OK frames for "
+            f"warmup + calibration, got {len(ok_entries)} for "
+            f"{cfg.dataset}/{cfg.category}"
+        )
+    if len(ng_entries) < calibration_ng:
+        raise FileNotFoundError(
+            f"need {calibration_ng} NG frames for calibration, got "
+            f"{len(ng_entries)} for {cfg.dataset}/{cfg.category}"
+        )
+    cal_ok = ok_entries[warmup_steps : warmup_steps + calibration_ok]
+    cal_ng = ng_entries[:calibration_ng]
+    selected = cal_ok + cal_ng
+    if cfg.shuffle:
+        random.shuffle(selected)
+    yield from _yield_frames(selected)
+
+
+def build_stream(
+    cfg: StreamConfig,
+    warmup_steps: int,
+    calibration_ok: int = 0,
+    calibration_ng: int = 0,
+) -> Iterator[Frame]:
+    """Yield the inference stream: remaining OK + remaining NG, mixed.
+
+    Disjoint from `build_warmup_stream` (the first `warmup_steps` OK)
+    and from `build_calibration_stream` (the next `calibration_ok` OK
+    plus the first `calibration_ng` NG of the seeded shuffles). The rest
+    is shuffled together so OK and NG frames are interleaved.
+    `cfg.max_frames` truncates the final list.
+
+    When `calibration_ok == 0 and calibration_ng == 0` the behavior is
+    the original two-pass split (warmup + test).
     """
     ok_entries, ng_entries = _discover_ok_ng(cfg)
     if cfg.shuffle:
         random.shuffle(ok_entries)
-    rest_ok = ok_entries[warmup_steps:]
-    inference_entries = rest_ok + ng_entries
+        # Shuffle NG only when a calibration split exists, so the
+        # manual threshold mode keeps the original two-pass determinism
+        # (no NG reserved → no NG shuffle).
+        if calibration_ng > 0:
+            random.shuffle(ng_entries)
+    rest_ok = ok_entries[warmup_steps + calibration_ok :]
+    rest_ng = ng_entries[calibration_ng:]
+    inference_entries = rest_ok + rest_ng
     if not inference_entries:
         raise FileNotFoundError(
             f"no inference frames left for {cfg.dataset}/{cfg.category} "
-            f"after reserving {warmup_steps} OK frames for warmup"
+            f"after reserving {warmup_steps} OK for warmup and "
+            f"{calibration_ok} OK + {calibration_ng} NG for calibration"
         )
     if cfg.shuffle:
         random.shuffle(inference_entries)

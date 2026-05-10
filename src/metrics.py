@@ -120,7 +120,6 @@ class OnlineMetrics:
             "window_size": self.cfg.window_size,
             "threshold_mode": self.cfg.threshold_mode,
             "threshold_used": self._threshold,
-            "threshold_quantile": self.cfg.threshold_quantile,
         }
 
 

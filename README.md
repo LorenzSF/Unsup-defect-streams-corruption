@@ -48,7 +48,7 @@ Main sections:
 - `warmup`: warmup_steps, use_clean_frames
 - `model`: name, backbone, device, checkpoint
 - `corruption`: enabled, specs
-- `metrics`: window_size, threshold_mode, manual_threshold, threshold_quantile
+- `metrics`: window_size, threshold_mode, manual_threshold, calibration_ok, calibration_ng
 - `visualization`: mode, every_n_frames, overlay_alpha
 - `benchmark`: enabled, baseline, learning_rate
 
@@ -59,10 +59,15 @@ Current implementation notes:
 - `model.name` supports `pca`, `patchcore`, `padim`, `subspacead`, `stfpm`, `csflow`, `draem`, `rd4ad`, and `efficientad`.
 - `efficientad` currently expects `model.checkpoint` to point to trained weights.
 - `visualization.mode: file` is the default path.
-- `metrics.threshold_mode` currently supports `manual` and `quantile`.
-- `quantile` re-scores the warm-up OK frames after fit and sets the
-  threshold to `np.quantile(scores, metrics.threshold_quantile)`. The
-  default `threshold_quantile: 1.0` uses the max OK score (strict).
+- `metrics.threshold_mode` currently supports `manual` and `f1_optimal`.
+- `f1_optimal` reserves a held-out OK + NG split (sized
+  `metrics.calibration_ok` and `metrics.calibration_ng`) drawn from the
+  seeded shuffle, scores it with the fitted model, and picks the
+  threshold that maximizes binary F1 on that set. The split is disjoint
+  from both the warm-up and the inference streams. NG calibration
+  samples are drawn across all `NG/<defect>/` folders, mixed by the
+  shuffle. `calibration_ok` and `calibration_ng` must both be `> 0` in
+  `f1_optimal` mode and exactly `0` in `manual` mode.
 
 ## Run
 

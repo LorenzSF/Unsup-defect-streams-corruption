@@ -13,7 +13,7 @@ stream:
   max_frames: null   # null = full stream
 
 warmup:
-  warmup_steps: 200
+  warmup_steps: 100
   use_clean_frames: true   # warm up before corruption is applied
 
 model:
@@ -23,7 +23,7 @@ model:
   checkpoint: null
 
 corruption:
-  enabled: true
+  enabled: false
   specs:
     - kind: jpeg_compression
       severity: 3
@@ -31,9 +31,10 @@ corruption:
 
 metrics:
   window_size: 500
-  threshold_mode: manual    # manual | quantile
+  threshold_mode: manual    # manual | f1_optimal
   manual_threshold: 0.5     # used only when threshold_mode == manual
-  threshold_quantile: 1.0   # used only when threshold_mode == quantile (1.0 = max OK score)
+  calibration_ok: 0         # only used when threshold_mode == f1_optimal (>0 required)
+  calibration_ng: 0         # only used when threshold_mode == f1_optimal (>0 required)
 
 visualization:
   mode: file        # window | file | none

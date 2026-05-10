@@ -15,7 +15,12 @@ from src.corruption import apply_corruption
 from src.metrics import OnlineMetrics
 from src.models import build_model
 from src.schemas import Frame, RunConfig
-from src.stream import build_stream, build_warmup_stream, warmup
+from src.stream import (
+    build_calibration_stream,
+    build_stream,
+    build_warmup_stream,
+    warmup,
+)
 from src.visualization import StreamVisualizer
 
 
@@ -75,7 +80,10 @@ def _jsonify(value: Any) -> Any:
 
 
 def _calibrate_threshold(
-    cfg: RunConfig, model, warmup_frames: List[Frame]
+    cfg: RunConfig,
+    model,
+    warmup_frames: List[Frame],
+    calibration_frames: List[Frame] | None = None,
 ) -> tuple[float, dict[str, Any]]:
     mode = cfg.metrics.threshold_mode
     if mode == "manual":
@@ -85,30 +93,73 @@ def _calibrate_threshold(
             "mode": mode,
             "threshold": threshold,
             "n_calibration_frames": 0,
-            "quantile": None,
         }
 
-    if mode == "quantile":
-        scores: list[float] = []
-        for frame in warmup_frames:
+    if mode == "f1_optimal":
+        if not calibration_frames:
+            raise RuntimeError(
+                "f1_optimal threshold calibration requires a non-empty "
+                "calibration_frames list (held-out OK + NG split)"
+            )
+        scores_list: list[float] = []
+        labels_list: list[int] = []
+        for frame in calibration_frames:
             pred = model.predict(frame)
             score = float(pred.score)
-            if math.isfinite(score):
-                scores.append(score)
-        if not scores:
+            if not math.isfinite(score):
+                continue
+            scores_list.append(score)
+            labels_list.append(int(frame.label))
+        scores_arr = np.asarray(scores_list, dtype=np.float64)
+        labels_arr = np.asarray(labels_list, dtype=np.int64)
+        n_ok = int((labels_arr == 0).sum())
+        n_ng = int((labels_arr == 1).sum())
+        if n_ok == 0 or n_ng == 0:
             raise RuntimeError(
-                "quantile threshold calibration: no finite scores from warmup frames"
+                "f1_optimal threshold calibration requires at least one OK "
+                f"and one NG frame in the calibration set, got n_ok={n_ok} "
+                f"n_ng={n_ng} (n_total={scores_arr.size})"
             )
-        q = cfg.metrics.threshold_quantile
-        threshold = float(np.quantile(np.asarray(scores, dtype=np.float64), q))
+        threshold, best_f1 = _f1_optimal_threshold(scores_arr, labels_arr)
         return threshold, {
             "mode": mode,
             "threshold": threshold,
-            "n_calibration_frames": len(scores),
-            "quantile": q,
+            "n_calibration_frames": int(scores_arr.size),
+            "n_calibration_ok": n_ok,
+            "n_calibration_ng": n_ng,
+            "calibration_f1": best_f1,
         }
 
     raise ValueError(f"unknown threshold_mode {mode!r}")
+
+
+def _f1_optimal_threshold(
+    scores: np.ndarray, labels: np.ndarray
+) -> tuple[float, float]:
+    """Pick the threshold that maximizes binary F1 on (scores, labels).
+
+    Sweeps every score value as a candidate cut. Ties are broken by
+    picking the smallest threshold (most permissive). Used by
+    `threshold_mode='f1_optimal'`.
+    """
+    candidates = np.unique(scores)
+    best_f1 = -1.0
+    best_thr = float(np.median(scores))
+    for thr in candidates:
+        pred = (scores >= float(thr)).astype(np.int64)
+        tp = int(np.sum((pred == 1) & (labels == 1)))
+        fp = int(np.sum((pred == 1) & (labels == 0)))
+        fn = int(np.sum((pred == 0) & (labels == 1)))
+        if tp + fp == 0 or tp + fn == 0:
+            continue
+        precision = tp / (tp + fp)
+        recall = tp / (tp + fn)
+        denom = precision + recall
+        f1 = 0.0 if denom == 0.0 else 2.0 * precision * recall / denom
+        if f1 > best_f1:
+            best_f1 = f1
+            best_thr = float(thr)
+    return best_thr, float(best_f1)
 
 
 def main() -> None:
@@ -136,8 +187,27 @@ def main() -> None:
         warmup_stream = apply_corruption(warmup_stream, cfg.corruption)
     warmup_frames = warmup(model, warmup_stream, cfg.warmup)
 
+    calibration_frames: List[Frame] | None = None
+    if cfg.metrics.threshold_mode == "f1_optimal":
+        print(
+            f"[main] collecting calibration set: "
+            f"{cfg.metrics.calibration_ok} OK + {cfg.metrics.calibration_ng} NG..."
+        )
+        set_seeds(cfg.seed)
+        calibration_stream = build_calibration_stream(
+            cfg.stream,
+            cfg.warmup.warmup_steps,
+            cfg.metrics.calibration_ok,
+            cfg.metrics.calibration_ng,
+        )
+        if not cfg.warmup.use_clean_frames:
+            calibration_stream = apply_corruption(calibration_stream, cfg.corruption)
+        calibration_frames = list(calibration_stream)
+
     print(f"[main] calibrating threshold mode={cfg.metrics.threshold_mode}...")
-    threshold, threshold_report = _calibrate_threshold(cfg, model, warmup_frames)
+    threshold, threshold_report = _calibrate_threshold(
+        cfg, model, warmup_frames, calibration_frames
+    )
     cold_start_s = time.perf_counter() - cold_start_t0
     print(
         "[main] threshold ready: "
@@ -146,7 +216,12 @@ def main() -> None:
 
     resolved_metrics_cfg = dataclasses.replace(cfg.metrics, threshold_value=threshold)
     set_seeds(cfg.seed)
-    stream = build_stream(cfg.stream, cfg.warmup.warmup_steps)
+    stream = build_stream(
+        cfg.stream,
+        cfg.warmup.warmup_steps,
+        cfg.metrics.calibration_ok,
+        cfg.metrics.calibration_ng,
+    )
 
     metrics = OnlineMetrics(resolved_metrics_cfg)
     viz = StreamVisualizer(cfg.visualization, run_dir)

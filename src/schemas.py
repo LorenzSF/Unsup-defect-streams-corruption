@@ -20,6 +20,7 @@ class Prediction:
     score: float
     anomaly_map: Optional[np.ndarray]
     latency_ms: float
+    embedding: Optional[np.ndarray] = None
 
 
 @dataclass
@@ -187,6 +188,10 @@ class VizConfig:
     mode: str
     every_n_frames: int
     overlay_alpha: float
+    dashboard_enabled: bool
+    dashboard_host: str
+    dashboard_port: int
+    dashboard_max_live_points: int
 
     def __post_init__(self) -> None:
         if self.mode not in {"window", "file", "none"}:
@@ -204,21 +209,17 @@ class VizConfig:
                 "VizConfig.overlay_alpha must be in 0..1, "
                 f"got {self.overlay_alpha}"
             )
-
-
-@dataclass(frozen=True)
-class BenchmarkConfig:
-    enabled: bool
-    baseline: str
-    learning_rate: float
-
-    def __post_init__(self) -> None:
-        if not self.baseline:
-            raise ValueError("BenchmarkConfig.baseline must be non-empty")
-        if self.learning_rate <= 0.0:
+        if not self.dashboard_host:
+            raise ValueError("VizConfig.dashboard_host must be non-empty")
+        if not 1 <= self.dashboard_port <= 65535:
             raise ValueError(
-                "BenchmarkConfig.learning_rate must be > 0, "
-                f"got {self.learning_rate}"
+                "VizConfig.dashboard_port must be in 1..65535, "
+                f"got {self.dashboard_port}"
+            )
+        if self.dashboard_max_live_points <= 0:
+            raise ValueError(
+                "VizConfig.dashboard_max_live_points must be > 0, "
+                f"got {self.dashboard_max_live_points}"
             )
 
 
@@ -233,7 +234,6 @@ class RunConfig:
     corruption: CorruptionConfig
     metrics: MetricsConfig
     visualization: VizConfig
-    benchmark: BenchmarkConfig
 
     def __post_init__(self) -> None:
         if not self.output_dir:

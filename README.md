@@ -4,7 +4,11 @@
 ## Goals
 
 1. Streaming inference and visualization for industrial image streams.
-2. Benchmarking a main detector against an online baseline on the same stream.
+2. Benchmarking SOTA detectors against each other on the same stream:
+   each model listed under `model.name` is run in turn with the rest of
+   `config.yaml` held fixed, and the resulting `report.json` files
+   under `output_dir/<experiment_name>/` form the side-by-side
+   comparison.
 3. Measuring robustness under synthetic image corruptions.
 
 ## Install
@@ -19,26 +23,42 @@ and then install `requirements.txt`.
 
 ## Data Layout
 
-The active stream loader expects extracted Real-IAD categories under:
+Datasets are not shipped with this repository. The `data/` directory is
+git-tracked (via `data/.gitkeep`) but its contents are ignored — download the
+dataset locally and lay it out as described below.
+
+The default `config.yaml` targets **Real-IAD** (multi-view industrial anomaly
+detection, 30 categories, `OK` / `NG` samples):
+
+- Project page: <https://realiad4ad.github.io/Real-IAD/>
+- License: CC BY-NC-SA 4.0 — research use only; access granted via the
+  request form on the project page.
+
+Extract the `realiad_1024` split so the tree matches:
 
 ```text
 data/
-  NAME_dataset/
-      Category of the piece/
+  Real-IAD_dataset/
+    realiad_1024/
+      <category>/             # e.g. audiojack, bottle_cap, ...
         OK/
-            img1.jpg
+          <specimen>/
+            *.jpg
         NG/
-          Defect name/
-              img1.jpg
+          <defect>/            # e.g. BX, ...
+            <specimen>/
+              *.jpg
 ```
 
 Rules:
 
-- `stream.category` must match the category directory name.
-- Normal frames live under `OK/`.
-- Anomalous frames live under `NG/<defect_name>/`.
-- Images are discovered recursively.
-- Only `.jpg` and `.jpeg` files are streamed.
+- `stream.data_root` points at the resolution split (default
+  `data/Real-IAD_dataset/realiad_1024`).
+- `stream.category` must match a category directory name under `data_root`.
+- Normal frames live under `OK/`, anomalous frames under `NG/<defect>/`.
+- Images are discovered recursively. Only `.jpg` and `.jpeg` are streamed.
+- Any dataset that follows the same `OK/` / `NG/<defect>/` convention works
+  by pointing `stream.data_root` and `stream.category` at it.
 
 ## Config
 Main sections:
@@ -50,7 +70,6 @@ Main sections:
 - `corruption`: enabled, specs
 - `metrics`: window_size, threshold_mode, manual_threshold, calibration_ok, calibration_ng
 - `visualization`: mode, every_n_frames, overlay_alpha
-- `benchmark`: enabled, baseline, learning_rate
 
 Current implementation notes:
 
@@ -87,6 +106,12 @@ Current per-run report fields include:
 - setup/runtime: `runtime.cold_start_s`, `runtime.peak_vram_mb`
 - threshold metadata: `threshold.mode`, `threshold.threshold`
 
+The same per-run directory also contains `frames.jsonl` — one JSON object
+per frame (`{idx, label, score, latency_ms}`) written line-buffered during
+the streaming loop. Use it to recompute metrics at arbitrary thresholds,
+inspect OK/NG score distributions, or separate pure model latency from
+stream pacing. Load with `pandas.read_json(path, lines=True)`.
+
 Rendered frames from `visualization.mode: file` are written into the same
 per-run directory as the report: `output_dir/<experiment_name>/`.
 
@@ -98,7 +123,6 @@ per-run directory as the report: `output_dir/<experiment_name>/`.
 - [src/corruption.py](src/corruption.py) — per-frame corruptions
 - [src/metrics.py](src/metrics.py) — online metrics
 - [src/visualization.py](src/visualization.py) — streaming outputs
-- [src/benchmark.py](src/benchmark.py) — online baseline
 
 ## Extending
 

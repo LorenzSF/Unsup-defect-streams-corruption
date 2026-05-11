@@ -3,7 +3,7 @@ from __future__ import annotations
 import math
 import time
 from pathlib import Path
-from typing import Any, Callable, Optional, Protocol, Sequence, runtime_checkable
+from typing import Any, Optional, Protocol, Sequence, runtime_checkable
 
 import numpy as np
 from PIL import Image
@@ -86,6 +86,51 @@ def _as_float(value: Any, default: float) -> float:
     if arr.size == 0:
         return default
     return float(arr.reshape(-1)[0])
+
+
+def _pool_to_vector(output: Any) -> Optional[np.ndarray]:
+    """Flatten any tensor / dict / list / tuple of tensors into a single 1D
+    embedding via spatial mean pooling.
+
+    Used by the embedding hook in `_TorchWarmupModel`: each detector
+    registers a forward hook on its feature-producing submodule (backbone,
+    encoder, student, etc.) and the captured output is pooled into a
+    fixed-length vector that the dashboard projects to 2D.
+    """
+    torch = _require_torch()
+    tensors: list = []
+
+    def _collect(obj: Any) -> None:
+        if isinstance(obj, torch.Tensor):
+            tensors.append(obj)
+        elif isinstance(obj, dict):
+            for v in obj.values():
+                _collect(v)
+        elif isinstance(obj, (list, tuple)):
+            for v in obj:
+                _collect(v)
+
+    _collect(output)
+    if not tensors:
+        return None
+
+    parts: list[np.ndarray] = []
+    for t in tensors:
+        try:
+            if t.ndim >= 3:
+                pooled = t.detach().float().mean(dim=tuple(range(2, t.ndim)))
+            else:
+                pooled = t.detach().float()
+            if pooled.ndim >= 1 and pooled.shape[0] > 0:
+                pooled = pooled[0]
+            arr = pooled.cpu().numpy().astype(np.float32).flatten()
+            if arr.size > 0:
+                parts.append(arr)
+        except Exception:
+            continue
+    if not parts:
+        return None
+    return np.concatenate(parts)
 
 
 def _as_heatmap(value: Any) -> Optional[np.ndarray]:
@@ -190,6 +235,24 @@ class _TorchWarmupModel:
         self._model = None
         self._transform = None
         self._ready = False
+        self._last_embedding: Optional[np.ndarray] = None
+        self._embedding_hook = None
+
+    def _register_embedding_hook(self, target: Any) -> None:
+        """Attach a forward hook on `target` so the dashboard can read the
+        per-frame feature vector. Called once at the end of fit_warmup."""
+        if target is None:
+            return
+
+        def _hook(_module: Any, _inp: Any, output: Any) -> None:
+            vec = _pool_to_vector(output)
+            if vec is not None:
+                self._last_embedding = vec
+
+        try:
+            self._embedding_hook = target.register_forward_hook(_hook)
+        except Exception:
+            self._embedding_hook = None
 
     def _ensure_transform(self):
         if self._transform is not None:
@@ -221,11 +284,18 @@ class _TorchWarmupModel:
             raise RuntimeError("call fit_warmup() before predict()")
         torch = _require_torch()
         x = self._image_to_tensor(frame.image).unsqueeze(0)
+        self._last_embedding = None
         t0 = time.perf_counter()
         with torch.no_grad():
             output = self._model(x)
         latency_ms = (time.perf_counter() - t0) * 1000.0
-        return _prediction_from_anomalib_output(output, latency_ms)
+        base = _prediction_from_anomalib_output(output, latency_ms)
+        return Prediction(
+            score=base.score,
+            anomaly_map=base.anomaly_map,
+            latency_ms=base.latency_ms,
+            embedding=self._last_embedding,
+        )
 
 
 class PatchcoreDetector(_TorchWarmupModel):
@@ -258,6 +328,7 @@ class PatchcoreDetector(_TorchWarmupModel):
         model.eval()
         self._model = model
         self._ready = True
+        self._register_embedding_hook(getattr(model, "feature_extractor", None))
 
 
 class PadimDetector(_TorchWarmupModel):
@@ -287,6 +358,7 @@ class PadimDetector(_TorchWarmupModel):
         model.eval()
         self._model = model
         self._ready = True
+        self._register_embedding_hook(getattr(model, "feature_extractor", None))
 
 
 class StfpmDetector(_TorchWarmupModel):
@@ -327,6 +399,7 @@ class StfpmDetector(_TorchWarmupModel):
         model.eval()
         self._model = model
         self._ready = True
+        self._register_embedding_hook(getattr(model, "student_model", None))
 
 
 class CsflowDetector(_TorchWarmupModel):
@@ -372,6 +445,7 @@ class CsflowDetector(_TorchWarmupModel):
         model.eval()
         self._model = model
         self._ready = True
+        self._register_embedding_hook(getattr(model, "feature_extractor", None))
 
 
 class DraemDetector(_TorchWarmupModel):
@@ -406,6 +480,7 @@ class DraemDetector(_TorchWarmupModel):
         model.eval()
         self._model = model
         self._ready = True
+        self._register_embedding_hook(getattr(model, "discriminative_subnetwork", None))
 
 
 class Rd4adDetector(_TorchWarmupModel):
@@ -454,12 +529,18 @@ class Rd4adDetector(_TorchWarmupModel):
         model.eval()
         self._model = model
         self._ready = True
+        self._register_embedding_hook(getattr(model, "encoder", None))
 
 
 class SubspaceADDetector:
     GRID = 512
 
     def __init__(self, cfg: ModelConfig) -> None:
+        if cfg.checkpoint is not None:
+            raise ValueError(
+                "subspacead does not support checkpoint loading; the DINOv2 "
+                "backbone is fetched via cfg.backbone (HuggingFace id)"
+            )
         self.cfg = cfg
         self.device = cfg.device
         self.model_ckpt = cfg.backbone or "facebook/dinov2-with-registers-large"
@@ -514,10 +595,12 @@ class SubspaceADDetector:
             interpolation=cv2.INTER_LINEAR,
         )
         latency_ms = (time.perf_counter() - t0) * 1000.0
+        embedding = spatial[0].reshape(-1, spatial.shape[-1]).mean(axis=0).astype(np.float32)
         return Prediction(
             score=float(np.mean(np.sort(score_map.reshape(-1))[-max(1, score_map.size // 100) :])),
             anomaly_map=_as_heatmap(score_map),
             latency_ms=latency_ms,
+            embedding=embedding,
         )
 
     def _extract_tokens(self, images: Sequence[np.ndarray]) -> tuple[np.ndarray, np.ndarray]:
@@ -580,6 +663,7 @@ class EfficientAdDetector(_TorchWarmupModel):
         model.eval()
         self._model = model
         self._ready = True
+        self._register_embedding_hook(getattr(model, "student", None))
 
 
 class PCADetector:
@@ -620,7 +704,12 @@ class PCADetector:
         per_pixel = (residual**2).reshape(self.GRID, self.GRID, 3).mean(axis=2)
         amap = self._upsample(per_pixel, frame.image.shape[:2])
         latency_ms = (time.perf_counter() - t0) * 1000.0
-        return Prediction(score=score, anomaly_map=amap, latency_ms=latency_ms)
+        return Prediction(
+            score=score,
+            anomaly_map=amap,
+            latency_ms=latency_ms,
+            embedding=proj.astype(np.float32),
+        )
 
     def _flatten(self, image: np.ndarray) -> np.ndarray:
         h, w = image.shape[:2]

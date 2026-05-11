@@ -40,8 +40,3 @@ visualization:
   mode: file        # window | file | none
   every_n_frames: 10
   overlay_alpha: 0.5
-
-benchmark:
-  enabled: true
-  baseline: online_autoencoder
-  learning_rate: 1.0e-4

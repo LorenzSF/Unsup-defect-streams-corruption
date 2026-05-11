@@ -1,6 +1,8 @@
+import json
 import math
 import time
 from collections import deque
+from pathlib import Path
 from typing import Deque
 
 import numpy as np
@@ -121,6 +123,37 @@ class OnlineMetrics:
             "threshold_mode": self.cfg.threshold_mode,
             "threshold_used": self._threshold,
         }
+
+
+class FrameLogger:
+    """Per-frame JSONL trace writer; line-buffered so a crash leaves a valid prefix."""
+
+    def __init__(self, path: Path) -> None:
+        self._path = path
+        self._fh = None
+
+    def __enter__(self) -> "FrameLogger":
+        self._fh = self._path.open("w", buffering=1, encoding="utf-8")
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        if self._fh is not None:
+            self._fh.close()
+            self._fh = None
+
+    def write(self, frame: Frame, pred: Prediction) -> None:
+        score = float(pred.score)
+        self._fh.write(
+            json.dumps(
+                {
+                    "idx": int(frame.index),
+                    "label": int(frame.label),
+                    "score": score if math.isfinite(score) else None,
+                    "latency_ms": float(pred.latency_ms),
+                }
+            )
+            + "\n"
+        )
 
 
 def _auroc(scores, labels) -> float:

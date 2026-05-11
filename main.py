@@ -10,9 +10,8 @@ from typing import Any, List
 
 import numpy as np
 
-from src.benchmark import OnlineBaseline
 from src.corruption import apply_corruption
-from src.metrics import OnlineMetrics
+from src.metrics import FrameLogger, OnlineMetrics
 from src.models import build_model
 from src.schemas import Frame, RunConfig
 from src.stream import (
@@ -225,19 +224,18 @@ def main() -> None:
 
     metrics = OnlineMetrics(resolved_metrics_cfg)
     viz = StreamVisualizer(cfg.visualization, run_dir)
-    baseline = OnlineBaseline(cfg.benchmark) if cfg.benchmark.enabled else None
 
     corrupted = apply_corruption(stream, cfg.corruption)
 
     print("[main] starting streaming inference loop")
-    for frame in corrupted:
-        pred = model.predict(frame)
-        metrics.update(frame, pred)
-        viz.render(frame, pred, metrics.snapshot())
-        if baseline is not None:
-            baseline.update(frame, pred)
-        if frame.index % cfg.log_every == 0:
-            print(f"[step {frame.index}] {metrics.snapshot()}")
+    with FrameLogger(run_dir / "frames.jsonl") as frames_log:
+        for frame in corrupted:
+            pred = model.predict(frame)
+            metrics.update(frame, pred)
+            viz.render(frame, pred, metrics.snapshot())
+            frames_log.write(frame, pred)
+            if frame.index % cfg.log_every == 0:
+                print(f"[step {frame.index}] {metrics.snapshot()}")
 
     report = metrics.finalize()
     if torch is not None and torch.cuda.is_available() and cfg.model.device.startswith("cuda"):
@@ -255,8 +253,6 @@ def main() -> None:
     report["warmup"] = dataclasses.asdict(cfg.warmup)
     report["model"] = dataclasses.asdict(cfg.model)
     report["corruption"] = dataclasses.asdict(cfg.corruption)
-    if baseline is not None:
-        report["baseline"] = baseline.snapshot()
     report_path = save_report(report, run_dir)
     viz.close()
     print(f"[main] done: {report_path}")

@@ -1,5 +1,6 @@
 # Big archives that contain dataset and outputs of experiments.
-data/
+data/*
+!data/.gitkeep
 outputs/
 checkpoints/
 
@@ -24,3 +25,6 @@ PLAN.md
 ARCHITECTURE.md
 BEST_PRACTICES.md
 *.ipynb
+HPC_KU Leuven.md
+scripts/
+OLD_dashboard.py

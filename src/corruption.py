@@ -30,14 +30,6 @@ def apply_corruption(
                 f"unknown corruption kind '{spec.kind}' "
                 f"(supported: {sorted(_CORRUPTIONS)})"
             )
-        if not 1 <= spec.severity <= 5:
-            raise ValueError(
-                f"severity must be in 1..5, got {spec.severity}"
-            )
-        if not 0.0 <= spec.probability <= 1.0:
-            raise ValueError(
-                f"probability must be in 0..1, got {spec.probability}"
-            )
 
     for frame in stream:
         img = frame.image

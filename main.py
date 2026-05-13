@@ -19,7 +19,7 @@ from src.metrics import FrameLogger, OnlineMetrics
 from src.models import build_model
 from src.schemas import Frame, RunConfig
 from src.stream import build_stream, build_warmup_stream, warmup
-from src.visualization import StreamVisualizer
+from src.visualization import StreamVisualizer, prediction_projection_vector
 
 
 def set_seeds(seed: int) -> None:
@@ -166,7 +166,7 @@ def _calibrate_threshold(
 def _pot_threshold(
     scores: np.ndarray, pot_risk: float
 ) -> tuple[float, dict[str, Any]]:
-    """Siffer et al. 2017, KDD, §3.2. Fit a Generalized Pareto to the upper
+    """Siffer et al. 2017, KDD, §3.2. Fit a Generalized Pareto to the upper 
     tail of the calibration scores and derive the threshold at target risk
     `pot_risk` (false positive rate)."""
     init_q = 0.98
@@ -195,29 +195,26 @@ def _pot_threshold(
     }
 
 
-def _collect_warmup_embeddings(
+def _collect_warmup_projection_vectors(
     model, warmup_frames: List[Frame], enabled: bool
 ) -> "np.ndarray | None":
-    """Re-score the warmup frames to harvest their per-frame embeddings.
+    """Re-score warmup frames to harvest vectors for dashboard PCA.
 
-    The dashboard's reference cloud (gray dots in the 2D scatter) is the
-    PCA(2) projection of these vectors. The model is already fitted at
-    this point — this second pass exists because embeddings are emitted
-    by `predict`, not by `fit_warmup`. Returns None when the dashboard is
-    disabled, when no detector emits an embedding, or when embeddings
-    have inconsistent dimensions across frames.
+    The dashboard's reference cloud is the StandardScaler + PCA(2)
+    projection of these vectors. The model is already fitted at this point;
+    this second pass exists because vectors depend on `predict` outputs.
+    Returns None when the dashboard is disabled or vector dimensions are
+    inconsistent across frames.
     """
     if not enabled:
         return None
     vecs: list[np.ndarray] = []
     for frame in warmup_frames:
         pred = model.predict(frame)
-        if pred.embedding is None:
+        vec = prediction_projection_vector(pred)
+        if vec is None:
             continue
-        emb = np.asarray(pred.embedding, dtype=np.float32).reshape(-1)
-        if emb.size == 0:
-            continue
-        vecs.append(emb)
+        vecs.append(vec)
     if len(vecs) < 2:
         return None
     sizes = {v.size for v in vecs}
@@ -280,11 +277,15 @@ def main() -> None:
     stream = build_stream(cfg.stream, cfg.warmup.warmup_steps)
 
     metrics = OnlineMetrics(resolved_metrics_cfg)
-    warmup_embeddings = _collect_warmup_embeddings(
+    warmup_projection_vectors = _collect_warmup_projection_vectors(
         model, warmup_frames, cfg.visualization.dashboard_enabled
     )
     viz = StreamVisualizer(
-        cfg.visualization, run_dir, active_threshold, warmup_embeddings
+        cfg.visualization,
+        run_dir,
+        active_threshold,
+        cfg.model.name,
+        warmup_projection_vectors,
     )
 
     corrupted = apply_corruption(stream, cfg.corruption)
@@ -322,6 +323,7 @@ def main() -> None:
                         }
                     )
                     metrics.set_threshold(active_threshold)
+                    viz.set_threshold(active_threshold)
                     pot_ready = True
                     print(
                         "[main] threshold switched: "

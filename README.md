@@ -97,8 +97,10 @@ Current implementation notes:
   server in a daemon thread alongside `main.py`. Open
   `http://<dashboard_host>:<dashboard_port>/` to see the live dashboard
   (six metric tiles, the current frame with heatmap overlay, and a
-  PCA(2) projection of the per-frame embedding with the warm-up frames
-  as a reference cloud). The dashboard runs orthogonally to
+  StandardScaler + PCA(2) projection of a per-frame vector combining
+  embedding, score, and anomaly-map statistics with the warm-up frames
+  as a reference cloud). Live points are colored by predicted label:
+  green for `0`, red for `1`. The dashboard runs orthogonally to
   `visualization.mode` - any combination is valid. To use it from
   Google Colab, expose the port with `pyngrok` or
   `google.colab.output.serve_kernel_port_as_window`; from a remote

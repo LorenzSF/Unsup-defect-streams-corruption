@@ -4,7 +4,7 @@ log_every: 50
 
 stream:
   dataset: real_iad
-  input_path: data/input_images
+  input_path: data/Croissant_dataset/data_vandemoortele_crops
   extensions:
     - .jpg
     - .jpeg
@@ -31,8 +31,8 @@ metrics:
   window_size: 500
   threshold_mode: pot       # manual | pot
   calibration_steps: 500    # first N post-warmup frames used to calibrate POT
-  initial_threshold: 0.5    # used until POT calibration is ready
-  manual_threshold: 0.5     # used only when threshold_mode == manual
+  initial_threshold: 0.8    # used until POT calibration is ready
+  manual_threshold: 0.8     # used only when threshold_mode == manual
   pot_risk: 1.0e-3          # target false-positive rate for POT (Siffer et al. 2017)
 
 visualization:

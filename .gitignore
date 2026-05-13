@@ -20,6 +20,10 @@ __pycache__/
 .vscode/
 memory/
 
+texput.log
+_compile.log
+
+
 # Internal files to develop the pipeline:
 PLAN.md
 ARCHITECTURE.md
@@ -28,3 +32,5 @@ BEST_PRACTICES.md
 HPC_KU Leuven.md
 scripts/
 OLD_dashboard.py
+thesis/
+notebooks/

@@ -4,8 +4,8 @@
 output as before (controlled by `cfg.mode`). When `cfg.dashboard_enabled`
 is true it also runs a FastAPI + WebSocket server in a daemon thread that
 pushes live metrics, the heatmap-overlaid frame, and the per-frame
-embedding 2D projection to a browser dashboard. Single file by design
-(BEST_PRACTICES rules 6, 7).
+PCA projection vector to a browser dashboard. Single file by design
+(B_P.md rules 6, 7).
 """
 from __future__ import annotations
 
@@ -45,11 +45,11 @@ HTML_PAGE = """<!doctype html>
 <script src="https://cdn.jsdelivr.net/npm/plotly.js-dist-min@2.35.2/plotly.min.js"></script>
 <style>
 :root {
-  --bg: #0b0f15;
-  --panel: #131922;
-  --ink: #e6edf3;
-  --muted: #8b95a4;
-  --line: #232c39;
+  --bg: #ffffff;
+  --panel: #ffffff;
+  --ink: #172033;
+  --muted: #667085;
+  --line: #d9dee7;
   --good: #10b981;
   --bad: #ef4444;
 }
@@ -100,7 +100,7 @@ main {
 .tile {
   background: var(--panel);
   border: 1px solid var(--line);
-  border-radius: 10px;
+  border-radius: 8px;
   padding: 14px 16px;
 }
 .tile .label {
@@ -115,14 +115,19 @@ main {
   font-weight: 700;
   margin-top: 6px;
   font-variant-numeric: tabular-nums;
-  letter-spacing: -0.01em;
+  letter-spacing: 0;
+  overflow-wrap: anywhere;
+}
+.tile .value.text {
+  font-size: 18px;
+  line-height: 1.25;
 }
 .tile .unit { font-size: 13px; color: var(--muted); font-weight: 500; margin-left: 2px; }
 .panels { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
 .panel {
   background: var(--panel);
   border: 1px solid var(--line);
-  border-radius: 10px;
+  border-radius: 8px;
   padding: 16px;
   min-height: 520px;
   display: flex;
@@ -148,7 +153,7 @@ main {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: #050709;
+  background: #f5f7fa;
   border-radius: 8px;
   overflow: hidden;
 }
@@ -182,8 +187,8 @@ main {
   <section class="metrics">
     <div class="tile"><div class="label">FPS</div><div class="value" id="m-fps">&mdash;</div></div>
     <div class="tile"><div class="label">Latency p95</div><div class="value" id="m-lat">&mdash;</div></div>
-    <div class="tile"><div class="label">AUROC</div><div class="value" id="m-auroc">&mdash;</div></div>
-    <div class="tile"><div class="label">F1</div><div class="value" id="m-f1">&mdash;</div></div>
+    <div class="tile"><div class="label">Threshold</div><div class="value" id="m-threshold">&mdash;</div></div>
+    <div class="tile"><div class="label">Model</div><div class="value text" id="m-model">&mdash;</div></div>
     <div class="tile"><div class="label">Anomaly rate</div><div class="value" id="m-anom">&mdash;</div></div>
     <div class="tile"><div class="label">Frames</div><div class="value" id="m-frames">&mdash;</div></div>
   </section>
@@ -197,7 +202,7 @@ main {
     </div>
     <div class="panel">
       <div class="panel-title">
-        <h2>Embedding &middot; PCA(2) projection</h2>
+        <h2>Model vector &middot; scaled PCA(2)</h2>
         <div class="meta" id="embedding-meta">waiting for data...</div>
       </div>
       <div id="embedding-plot"></div>
@@ -206,14 +211,14 @@ main {
 </main>
 <script>
 const COLOR_REF = '#5b6573';
-const COLOR_LATEST_BORDER = '#fef3c7';
+const COLOR_LATEST_BORDER = '#172033';
 const PLOT_LAYOUT = {
-  paper_bgcolor: '#131922',
-  plot_bgcolor: '#0b0f15',
-  font: { color: '#e6edf3', family: 'Segoe UI, sans-serif', size: 11 },
+  paper_bgcolor: '#ffffff',
+  plot_bgcolor: '#ffffff',
+  font: { color: '#172033', family: 'Segoe UI, sans-serif', size: 11 },
   margin: { l: 36, r: 16, t: 8, b: 32 },
-  xaxis: { gridcolor: '#232c39', zerolinecolor: '#232c39' },
-  yaxis: { gridcolor: '#232c39', zerolinecolor: '#232c39' },
+  xaxis: { gridcolor: '#d9dee7', zerolinecolor: '#d9dee7' },
+  yaxis: { gridcolor: '#d9dee7', zerolinecolor: '#d9dee7' },
   showlegend: false,
   hovermode: 'closest',
 };
@@ -224,6 +229,7 @@ let embeddingEnabled = false;
 let liveHistory = [];
 let maxLive = 200;
 let threshold = 1.0;
+let modelName = '-';
 
 function fmtNum(v, digits) {
   digits = digits == null ? 2 : digits;
@@ -239,20 +245,8 @@ function fmtPct(v) {
   return (Number(v) * 100).toFixed(1) + '%';
 }
 
-function pointColor(scoreRatio) {
-  const r = Math.max(0, Math.min(1, Number(scoreRatio) || 0));
-  // green -> amber -> red
-  if (r < 0.5) {
-    const t = r / 0.5;
-    return 'rgb(' + Math.round(16 + t * (245 - 16)) + ','
-      + Math.round(185 - t * (185 - 158)) + ','
-      + Math.round(129 - t * (129 - 11)) + ')';
-  } else {
-    const t = (r - 0.5) / 0.5;
-    return 'rgb(' + Math.round(245 + t * (239 - 245)) + ','
-      + Math.round(158 - t * (158 - 68)) + ','
-      + Math.round(11 + t * (68 - 11)) + ')';
-  }
+function pointColor(predLabel) {
+  return Number(predLabel) === 1 ? '#ef4444' : '#10b981';
 }
 
 function setConn(connected) {
@@ -275,8 +269,8 @@ function initEmbeddingPlot(refX, refY, axis) {
     {
       x: [], y: [],
       mode: 'markers', type: 'scattergl',
-      marker: { size: 8, color: [], opacity: 0.85, line: { width: 0.5, color: '#0b0f15' } },
-      hovertemplate: 'score %{customdata:.4f}<extra></extra>',
+      marker: { size: 8, color: [], opacity: 0.85, line: { width: 0.5, color: '#ffffff' } },
+      hovertemplate: 'score %{customdata[0]:.4f}<br>pred %{customdata[1]}<extra></extra>',
       customdata: [],
     },
     {
@@ -298,8 +292,8 @@ function initEmbeddingPlot(refX, refY, axis) {
 
 function showEmbeddingDisabled() {
   document.getElementById('embedding-plot').innerHTML =
-    '<div class="empty">Embedding unavailable for this run.<br>'
-    + '(detector emitted no warmup embeddings or warmup_embeddings &lt; 2)</div>';
+    '<div class="empty">Projection unavailable for this run.<br>'
+    + '(warmup produced fewer than two valid projection vectors)</div>';
   document.getElementById('embedding-meta').textContent = 'disabled';
 }
 
@@ -307,17 +301,17 @@ function applyEmbedding() {
   if (!embeddingEnabled || liveHistory.length === 0) return;
   const x = liveHistory.map(function (p) { return p.x; });
   const y = liveHistory.map(function (p) { return p.y; });
-  const colors = liveHistory.map(function (p) { return pointColor(p.score_ratio); });
-  const scores = liveHistory.map(function (p) { return p.score; });
+  const colors = liveHistory.map(function (p) { return pointColor(p.pred_label); });
+  const pointData = liveHistory.map(function (p) { return [p.score, p.pred_label]; });
   Plotly.restyle('embedding-plot', {
     x: [x], y: [y],
     'marker.color': [colors],
-    customdata: [scores],
+    customdata: [pointData],
   }, [1]);
   const last = liveHistory[liveHistory.length - 1];
   Plotly.restyle('embedding-plot', {
     x: [[last.x]], y: [[last.y]],
-    'marker.color': [[pointColor(last.score_ratio)]],
+    'marker.color': [[pointColor(last.pred_label)]],
   }, [2]);
   document.getElementById('embedding-meta').textContent =
     liveHistory.length + ' live pts · latest score ' + fmtNum(last.score, 4);
@@ -327,8 +321,8 @@ function applyMetrics(m) {
   document.getElementById('m-fps').textContent = fmtNum(m.fps, 1);
   document.getElementById('m-lat').innerHTML =
     fmtNum(m.p95_latency_ms, 1) + '<span class="unit"> ms</span>';
-  document.getElementById('m-auroc').textContent = fmtNum(m.auroc, 3);
-  document.getElementById('m-f1').textContent = fmtNum(m.f1, 3);
+  document.getElementById('m-threshold').textContent = fmtNum(threshold, 4);
+  document.getElementById('m-model').textContent = modelName;
   document.getElementById('m-anom').textContent = fmtPct(m.anomaly_rate);
   document.getElementById('m-frames').textContent = fmtInt(m.frames_seen);
 }
@@ -344,7 +338,9 @@ function applyFrame(b64, score) {
 }
 
 function onBootstrap(data) {
-  threshold = Number(data.threshold) || 1.0;
+  const bootThreshold = Number(data.threshold);
+  threshold = Number.isFinite(bootThreshold) ? bootThreshold : 1.0;
+  modelName = data.model_name || '-';
   maxLive = Number(data.max_live_points) || 200;
   embeddingEnabled = !!data.embedding_available;
   if (embeddingEnabled) {
@@ -362,6 +358,8 @@ function onBootstrap(data) {
 }
 
 function onLive(data) {
+  const liveThreshold = Number(data.threshold);
+  threshold = Number.isFinite(liveThreshold) ? liveThreshold : threshold;
   applyMetrics(data.metrics || {});
   applyFrame(data.frame_b64, data.score);
   if (data.new_point) {
@@ -407,10 +405,13 @@ class _DashboardState:
     reads through `bootstrap_payload` / `live_payload`.
     """
 
-    def __init__(self, threshold: float, max_live_points: int) -> None:
+    def __init__(
+        self, threshold: float, max_live_points: int, model_name: str
+    ) -> None:
         self._lock = threading.Lock()
         self._threshold = float(threshold)
         self._max_live_points = int(max_live_points)
+        self._model_name = model_name
         self._reference_x: List[float] = []
         self._reference_y: List[float] = []
         self._axis_bounds: Tuple[float, float, float, float] = (-1.0, 1.0, -1.0, 1.0)
@@ -419,11 +420,15 @@ class _DashboardState:
         self._score: float = 0.0
         self._fps: float = 0.0
         self._p95_lat: float = 0.0
-        self._auroc: Optional[float] = None
-        self._f1: Optional[float] = None
         self._anomaly_rate: float = 0.0
         self._frames_seen: int = 0
         self._live_history: List[dict] = []
+
+    def set_threshold(self, threshold: float) -> None:
+        if not math.isfinite(float(threshold)):
+            raise ValueError(f"threshold must be finite, got {threshold}")
+        with self._lock:
+            self._threshold = float(threshold)
 
     def set_reference_cloud(self, ref_2d: np.ndarray) -> None:
         if ref_2d.size == 0:
@@ -455,16 +460,15 @@ class _DashboardState:
             self._score = float(score)
             self._fps = float(snapshot.throughput_fps)
             self._p95_lat = float(snapshot.p95_latency_ms)
-            self._auroc = None if math.isnan(snapshot.auroc) else float(snapshot.auroc)
-            self._f1 = None if math.isnan(snapshot.f1) else float(snapshot.f1)
             self._anomaly_rate = float(anom_rate)
             self._frames_seen = int(snapshot.n_seen)
             if embedding_2d is not None:
+                pred_label = _pred_label(score, self._threshold)
                 self._live_history.append({
                     "x": float(embedding_2d[0]),
                     "y": float(embedding_2d[1]),
                     "score": float(score),
-                    "score_ratio": _score_ratio(score, self._threshold),
+                    "pred_label": pred_label,
                 })
                 if len(self._live_history) > self._max_live_points:
                     del self._live_history[: len(self._live_history) - self._max_live_points]
@@ -473,8 +477,6 @@ class _DashboardState:
         return {
             "fps": self._fps,
             "p95_latency_ms": self._p95_lat,
-            "auroc": self._auroc,
-            "f1": self._f1,
             "anomaly_rate": self._anomaly_rate,
             "frames_seen": self._frames_seen,
         }
@@ -488,6 +490,7 @@ class _DashboardState:
                 "reference_cloud_y": list(self._reference_y),
                 "axis_bounds": list(self._axis_bounds),
                 "threshold": self._threshold,
+                "model_name": self._model_name,
                 "max_live_points": self._max_live_points,
                 "live_history": list(self._live_history),
                 "metrics": self._metrics_locked(),
@@ -503,13 +506,48 @@ class _DashboardState:
                 "metrics": self._metrics_locked(),
                 "frame_b64": self._frame_b64,
                 "score": self._score,
+                "threshold": self._threshold,
                 "new_point": new_point,
             }
 
 
-def _score_ratio(score: float, threshold: float) -> float:
-    denom = max(float(threshold), 1e-9)
-    return float(max(0.0, min(1.0, float(score) / denom)))
+def _pred_label(score: float, threshold: float) -> int:
+    if not math.isfinite(float(score)):
+        return 1
+    return int(float(score) >= float(threshold))
+
+
+def prediction_projection_vector(pred: Prediction) -> Optional[np.ndarray]:
+    """Build the detector-agnostic vector used by StandardScaler + PCA(2)."""
+    parts: list[np.ndarray] = []
+    if pred.embedding is not None:
+        emb = np.asarray(pred.embedding, dtype=np.float32).reshape(-1)
+        if emb.size > 0:
+            parts.append(np.nan_to_num(emb, nan=0.0, posinf=0.0, neginf=0.0))
+
+    score = float(pred.score) if math.isfinite(float(pred.score)) else 0.0
+    parts.append(np.asarray([score], dtype=np.float32))
+    parts.append(_anomaly_map_stats(pred.anomaly_map))
+    vec = np.concatenate(parts).astype(np.float32)
+    return vec if vec.size > 0 else None
+
+
+def _anomaly_map_stats(anomaly_map: Optional[np.ndarray]) -> np.ndarray:
+    if anomaly_map is None:
+        return np.zeros(4, dtype=np.float32)
+    arr = np.asarray(anomaly_map, dtype=np.float32).reshape(-1)
+    arr = arr[np.isfinite(arr)]
+    if arr.size == 0:
+        return np.zeros(4, dtype=np.float32)
+    return np.asarray(
+        [
+            float(np.mean(arr)),
+            float(np.std(arr)),
+            float(np.max(arr)),
+            float(np.percentile(arr, 95)),
+        ],
+        dtype=np.float32,
+    )
 
 
 class _DashboardServer:
@@ -637,7 +675,8 @@ class StreamVisualizer:
         cfg: VizConfig,
         out_dir: Path,
         threshold: float,
-        warmup_embeddings: Optional[np.ndarray] = None,
+        model_name: str,
+        warmup_projection_vectors: Optional[np.ndarray] = None,
     ) -> None:
         if cfg.mode not in {"file", "window", "none"}:
             raise ValueError(
@@ -648,28 +687,41 @@ class StreamVisualizer:
         self._window_open = False
         self._counter = 0
         self._threshold = float(threshold)
+        self._model_name = model_name
         if self.cfg.mode == "file":
             self._out_dir.mkdir(parents=True, exist_ok=True)
 
         self._embedding_pca = None
+        self._embedding_scaler = None
         self._state: Optional[_DashboardState] = None
         self._server: Optional[_DashboardServer] = None
 
         if cfg.dashboard_enabled:
-            self._init_dashboard(warmup_embeddings)
+            self._init_dashboard(warmup_projection_vectors)
 
-    def _init_dashboard(self, warmup_embeddings: Optional[np.ndarray]) -> None:
+    def _init_dashboard(
+        self, warmup_projection_vectors: Optional[np.ndarray]
+    ) -> None:
         self._state = _DashboardState(
             threshold=self._threshold,
             max_live_points=self.cfg.dashboard_max_live_points,
+            model_name=self._model_name,
         )
         embedding_ok = False
-        if warmup_embeddings is not None and warmup_embeddings.ndim == 2 and warmup_embeddings.shape[0] >= 2:
+        if (
+            warmup_projection_vectors is not None
+            and warmup_projection_vectors.ndim == 2
+            and warmup_projection_vectors.shape[0] >= 2
+        ):
             try:
                 from sklearn.decomposition import PCA
+                from sklearn.preprocessing import StandardScaler
 
+                scaler = StandardScaler()
                 pca = PCA(n_components=2)
-                ref_2d = pca.fit_transform(warmup_embeddings)
+                scaled = scaler.fit_transform(warmup_projection_vectors)
+                ref_2d = pca.fit_transform(scaled)
+                self._embedding_scaler = scaler
                 self._embedding_pca = pca
                 self._state.set_reference_cloud(ref_2d)
                 embedding_ok = True
@@ -684,8 +736,15 @@ class StreamVisualizer:
         self._server.start()
         print(
             f"[viz] dashboard at http://{self.cfg.dashboard_host}:{self.cfg.dashboard_port}"
-            f" (embedding {'on' if embedding_ok else 'OFF'})"
+            f" (projection {'on' if embedding_ok else 'OFF'})"
         )
+
+    def set_threshold(self, threshold: float) -> None:
+        if not math.isfinite(float(threshold)):
+            raise ValueError(f"threshold must be finite, got {threshold}")
+        self._threshold = float(threshold)
+        if self._state is not None:
+            self._state.set_threshold(threshold)
 
     def render(
         self, frame: Frame, pred: Prediction, snapshot: MetricSnapshot
@@ -735,14 +794,14 @@ class StreamVisualizer:
         embedding_2d: Optional[Tuple[float, float]] = None
         if (
             self._embedding_pca is not None
-            and pred.embedding is not None
-            and pred.embedding.size > 0
+            and self._embedding_scaler is not None
         ):
             try:
                 exp_dim = int(self._embedding_pca.n_features_in_)
-                emb = np.asarray(pred.embedding, dtype=np.float32).reshape(-1)
-                if emb.size == exp_dim:
-                    proj = self._embedding_pca.transform(emb.reshape(1, -1))[0]
+                vec = prediction_projection_vector(pred)
+                if vec is not None and vec.size == exp_dim:
+                    scaled = self._embedding_scaler.transform(vec.reshape(1, -1))
+                    proj = self._embedding_pca.transform(scaled)[0]
                     embedding_2d = (float(proj[0]), float(proj[1]))
             except Exception:
                 embedding_2d = None

@@ -7,3 +7,6 @@ scipy
 anomalib
 transformers
 FrEIA
+fastapi
+uvicorn
+wsproto

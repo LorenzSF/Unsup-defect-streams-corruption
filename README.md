@@ -68,8 +68,8 @@ Main sections:
 - `warmup`: warmup_steps, use_clean_frames
 - `model`: name, backbone, device, checkpoint
 - `corruption`: enabled, specs
-- `metrics`: window_size, threshold_mode, manual_threshold, calibration_ok, calibration_ng
-- `visualization`: mode, every_n_frames, overlay_alpha
+- `metrics`: window_size, threshold_mode, manual_threshold, pot_risk
+- `visualization`: mode, every_n_frames, overlay_alpha, dashboard_enabled, dashboard_host, dashboard_port, dashboard_max_live_points
 
 Current implementation notes:
 
@@ -78,15 +78,29 @@ Current implementation notes:
 - `model.name` supports `pca`, `patchcore`, `padim`, `subspacead`, `stfpm`, `csflow`, `draem`, `rd4ad`, and `efficientad`.
 - `efficientad` currently expects `model.checkpoint` to point to trained weights.
 - `visualization.mode: file` is the default path.
-- `metrics.threshold_mode` currently supports `manual` and `f1_optimal`.
-- `f1_optimal` reserves a held-out OK + NG split (sized
-  `metrics.calibration_ok` and `metrics.calibration_ng`) drawn from the
-  seeded shuffle, scores it with the fitted model, and picks the
-  threshold that maximizes binary F1 on that set. The split is disjoint
-  from both the warm-up and the inference streams. NG calibration
-  samples are drawn across all `NG/<defect>/` folders, mixed by the
-  shuffle. `calibration_ok` and `calibration_ng` must both be `> 0` in
-  `f1_optimal` mode and exactly `0` in `manual` mode.
+- `visualization.dashboard_enabled: true` runs a FastAPI + WebSocket
+  server in a daemon thread alongside `main.py`. Open
+  `http://<dashboard_host>:<dashboard_port>/` to see the live dashboard
+  (six metric tiles, the current frame with heatmap overlay, and a
+  PCA(2) projection of the per-frame embedding with the warm-up frames
+  as a reference cloud). The dashboard runs orthogonally to
+  `visualization.mode` — any combination is valid. To use it from
+  Google Colab, expose the port with `pyngrok` or
+  `google.colab.output.serve_kernel_port_as_window`; from a remote
+  HPC node, use SSH local port forwarding
+  (`ssh -L 8765:localhost:8765 user@host`).
+- `metrics.threshold_mode` currently supports `manual` and `pot`.
+- `pot` is the unsupervised threshold from Siffer et al. 2017 (KDD,
+  "Anomaly Detection in Streams with Extreme Value Theory"). It fits a
+  Generalized Pareto Distribution to the upper tail (above the 0.98
+  quantile) of the warm-up OK scores and derives the threshold that
+  corresponds to a target false-positive rate `metrics.pot_risk`
+  (default `1e-3`). It does not require labels. The chosen threshold
+  is reported in `report.json` under `threshold.{pot_u, pot_ksi,
+  pot_sigma, pot_n_tail, ...}` for traceability. Threshold-free
+  evaluation (`auroc`, `aupr` in the report) is unaffected by this
+  choice — the threshold only determines the binary metrics
+  (`precision`, `recall`, `f1`).
 
 ## Run
 

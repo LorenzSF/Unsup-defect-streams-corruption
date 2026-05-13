@@ -13,7 +13,7 @@ stream:
   max_frames: null   # null = full stream
 
 warmup:
-  warmup_steps: 100
+  warmup_steps: 500        # >= 500 recommended for threshold_mode == pot (needs ~10 tail samples)
   use_clean_frames: true   # warm up before corruption is applied
 
 model:
@@ -31,12 +31,15 @@ corruption:
 
 metrics:
   window_size: 500
-  threshold_mode: manual    # manual | f1_optimal
+  threshold_mode: pot       # manual | pot
   manual_threshold: 0.5     # used only when threshold_mode == manual
-  calibration_ok: 0         # only used when threshold_mode == f1_optimal (>0 required)
-  calibration_ng: 0         # only used when threshold_mode == f1_optimal (>0 required)
+  pot_risk: 1.0e-3          # target false-positive rate for POT (Siffer et al. 2017)
 
 visualization:
   mode: file        # window | file | none
   every_n_frames: 10
   overlay_alpha: 0.5
+  dashboard_enabled: true             # serve a live dashboard while main.py runs
+  dashboard_host: 127.0.0.1           # bind address; 0.0.0.0 to expose on LAN
+  dashboard_port: 8765                # http port for the dashboard
+  dashboard_max_live_points: 200      # ring-buffer size for live embedding points

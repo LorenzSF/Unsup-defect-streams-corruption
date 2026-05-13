@@ -10,16 +10,13 @@ from typing import Any, List
 
 import numpy as np
 
+from scipy.stats import genpareto
+
 from src.corruption import apply_corruption
 from src.metrics import FrameLogger, OnlineMetrics
 from src.models import build_model
 from src.schemas import Frame, RunConfig
-from src.stream import (
-    build_calibration_stream,
-    build_stream,
-    build_warmup_stream,
-    warmup,
-)
+from src.stream import build_stream, build_warmup_stream, warmup
 from src.visualization import StreamVisualizer
 
 
@@ -82,83 +79,93 @@ def _calibrate_threshold(
     cfg: RunConfig,
     model,
     warmup_frames: List[Frame],
-    calibration_frames: List[Frame] | None = None,
 ) -> tuple[float, dict[str, Any]]:
     mode = cfg.metrics.threshold_mode
     if mode == "manual":
         assert cfg.metrics.manual_threshold is not None
         threshold = float(cfg.metrics.manual_threshold)
-        return threshold, {
-            "mode": mode,
-            "threshold": threshold,
-            "n_calibration_frames": 0,
-        }
+        return threshold, {"mode": mode, "threshold": threshold}
 
-    if mode == "f1_optimal":
-        if not calibration_frames:
-            raise RuntimeError(
-                "f1_optimal threshold calibration requires a non-empty "
-                "calibration_frames list (held-out OK + NG split)"
-            )
+    if mode == "pot":
         scores_list: list[float] = []
-        labels_list: list[int] = []
-        for frame in calibration_frames:
+        for frame in warmup_frames:
             pred = model.predict(frame)
             score = float(pred.score)
-            if not math.isfinite(score):
-                continue
-            scores_list.append(score)
-            labels_list.append(int(frame.label))
+            if math.isfinite(score):
+                scores_list.append(score)
         scores_arr = np.asarray(scores_list, dtype=np.float64)
-        labels_arr = np.asarray(labels_list, dtype=np.int64)
-        n_ok = int((labels_arr == 0).sum())
-        n_ng = int((labels_arr == 1).sum())
-        if n_ok == 0 or n_ng == 0:
+        if scores_arr.size == 0:
             raise RuntimeError(
-                "f1_optimal threshold calibration requires at least one OK "
-                f"and one NG frame in the calibration set, got n_ok={n_ok} "
-                f"n_ng={n_ng} (n_total={scores_arr.size})"
+                "pot calibration requires at least one finite warmup score"
             )
-        threshold, best_f1 = _f1_optimal_threshold(scores_arr, labels_arr)
-        return threshold, {
-            "mode": mode,
-            "threshold": threshold,
-            "n_calibration_frames": int(scores_arr.size),
-            "n_calibration_ok": n_ok,
-            "n_calibration_ng": n_ng,
-            "calibration_f1": best_f1,
-        }
+        threshold, report = _pot_threshold(scores_arr, cfg.metrics.pot_risk)
+        report.update({"mode": mode, "threshold": threshold})
+        return threshold, report
 
     raise ValueError(f"unknown threshold_mode {mode!r}")
 
 
-def _f1_optimal_threshold(
-    scores: np.ndarray, labels: np.ndarray
-) -> tuple[float, float]:
-    """Pick the threshold that maximizes binary F1 on (scores, labels).
+def _pot_threshold(
+    scores: np.ndarray, pot_risk: float
+) -> tuple[float, dict[str, Any]]:
+    """Siffer et al. 2017, KDD, §3.2. Fit a Generalized Pareto to the upper
+    tail of the warm-up scores and derive the threshold at target risk
+    `pot_risk` (false positive rate)."""
+    init_q = 0.98
+    u = float(np.quantile(scores, init_q))
+    tail = scores[scores > u] - u
+    if tail.size < 10:
+        raise RuntimeError(
+            f"pot calibration: only {tail.size} exceedances above q={init_q} "
+            f"(need >= 10); increase warmup.warmup_steps"
+        )
+    ksi, _, sigma = genpareto.fit(tail, floc=0.0)
+    n, n_u = int(scores.size), int(tail.size)
+    ratio = (n / n_u) * pot_risk
+    if abs(ksi) < 1e-9:
+        threshold = u - float(sigma) * math.log(ratio)
+    else:
+        threshold = u + (float(sigma) / float(ksi)) * (ratio ** (-float(ksi)) - 1.0)
+    return float(threshold), {
+        "pot_risk": float(pot_risk),
+        "pot_init_quantile": init_q,
+        "pot_u": u,
+        "pot_ksi": float(ksi),
+        "pot_sigma": float(sigma),
+        "pot_n_tail": n_u,
+        "n_warmup_scores": n,
+    }
 
-    Sweeps every score value as a candidate cut. Ties are broken by
-    picking the smallest threshold (most permissive). Used by
-    `threshold_mode='f1_optimal'`.
+
+def _collect_warmup_embeddings(
+    model, warmup_frames: List[Frame], enabled: bool
+) -> "np.ndarray | None":
+    """Re-score the warmup frames to harvest their per-frame embeddings.
+
+    The dashboard's reference cloud (gray dots in the 2D scatter) is the
+    PCA(2) projection of these vectors. The model is already fitted at
+    this point — this second pass exists because embeddings are emitted
+    by `predict`, not by `fit_warmup`. Returns None when the dashboard is
+    disabled, when no detector emits an embedding, or when embeddings
+    have inconsistent dimensions across frames.
     """
-    candidates = np.unique(scores)
-    best_f1 = -1.0
-    best_thr = float(np.median(scores))
-    for thr in candidates:
-        pred = (scores >= float(thr)).astype(np.int64)
-        tp = int(np.sum((pred == 1) & (labels == 1)))
-        fp = int(np.sum((pred == 1) & (labels == 0)))
-        fn = int(np.sum((pred == 0) & (labels == 1)))
-        if tp + fp == 0 or tp + fn == 0:
+    if not enabled:
+        return None
+    vecs: list[np.ndarray] = []
+    for frame in warmup_frames:
+        pred = model.predict(frame)
+        if pred.embedding is None:
             continue
-        precision = tp / (tp + fp)
-        recall = tp / (tp + fn)
-        denom = precision + recall
-        f1 = 0.0 if denom == 0.0 else 2.0 * precision * recall / denom
-        if f1 > best_f1:
-            best_f1 = f1
-            best_thr = float(thr)
-    return best_thr, float(best_f1)
+        emb = np.asarray(pred.embedding, dtype=np.float32).reshape(-1)
+        if emb.size == 0:
+            continue
+        vecs.append(emb)
+    if len(vecs) < 2:
+        return None
+    sizes = {v.size for v in vecs}
+    if len(sizes) != 1:
+        return None
+    return np.stack(vecs, axis=0)
 
 
 def main() -> None:
@@ -186,27 +193,8 @@ def main() -> None:
         warmup_stream = apply_corruption(warmup_stream, cfg.corruption)
     warmup_frames = warmup(model, warmup_stream, cfg.warmup)
 
-    calibration_frames: List[Frame] | None = None
-    if cfg.metrics.threshold_mode == "f1_optimal":
-        print(
-            f"[main] collecting calibration set: "
-            f"{cfg.metrics.calibration_ok} OK + {cfg.metrics.calibration_ng} NG..."
-        )
-        set_seeds(cfg.seed)
-        calibration_stream = build_calibration_stream(
-            cfg.stream,
-            cfg.warmup.warmup_steps,
-            cfg.metrics.calibration_ok,
-            cfg.metrics.calibration_ng,
-        )
-        if not cfg.warmup.use_clean_frames:
-            calibration_stream = apply_corruption(calibration_stream, cfg.corruption)
-        calibration_frames = list(calibration_stream)
-
     print(f"[main] calibrating threshold mode={cfg.metrics.threshold_mode}...")
-    threshold, threshold_report = _calibrate_threshold(
-        cfg, model, warmup_frames, calibration_frames
-    )
+    threshold, threshold_report = _calibrate_threshold(cfg, model, warmup_frames)
     cold_start_s = time.perf_counter() - cold_start_t0
     print(
         "[main] threshold ready: "
@@ -215,15 +203,15 @@ def main() -> None:
 
     resolved_metrics_cfg = dataclasses.replace(cfg.metrics, threshold_value=threshold)
     set_seeds(cfg.seed)
-    stream = build_stream(
-        cfg.stream,
-        cfg.warmup.warmup_steps,
-        cfg.metrics.calibration_ok,
-        cfg.metrics.calibration_ng,
-    )
+    stream = build_stream(cfg.stream, cfg.warmup.warmup_steps)
 
     metrics = OnlineMetrics(resolved_metrics_cfg)
-    viz = StreamVisualizer(cfg.visualization, run_dir)
+    warmup_embeddings = _collect_warmup_embeddings(
+        model, warmup_frames, cfg.visualization.dashboard_enabled
+    )
+    viz = StreamVisualizer(
+        cfg.visualization, run_dir, threshold, warmup_embeddings
+    )
 
     corrupted = apply_corruption(stream, cfg.corruption)
 

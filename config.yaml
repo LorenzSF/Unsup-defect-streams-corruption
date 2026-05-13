@@ -4,8 +4,7 @@ log_every: 50
 
 stream:
   dataset: real_iad
-  category: audiojack
-  data_root: data/Real-IAD_dataset/realiad_1024
+  input_path: data/input_images
   extensions:
     - .jpg
     - .jpeg
@@ -13,8 +12,7 @@ stream:
   max_frames: null   # null = full stream
 
 warmup:
-  warmup_steps: 500        # >= 500 recommended for threshold_mode == pot (needs ~10 tail samples)
-  use_clean_frames: true   # warm up before corruption is applied
+  warmup_steps: 500        # first N input images used to fit the unsupervised detector
 
 model:
   name: pca                
@@ -32,6 +30,8 @@ corruption:
 metrics:
   window_size: 500
   threshold_mode: pot       # manual | pot
+  calibration_steps: 500    # first N post-warmup frames used to calibrate POT
+  initial_threshold: 0.5    # used until POT calibration is ready
   manual_threshold: 0.5     # used only when threshold_mode == manual
   pot_risk: 1.0e-3          # target false-positive rate for POT (Siffer et al. 2017)
 

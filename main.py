@@ -3,6 +3,8 @@ from __future__ import annotations
 import dataclasses
 import json
 import math
+import os
+import platform
 import random
 import time
 from pathlib import Path
@@ -50,8 +52,9 @@ def save_report(report: dict[str, Any], run_dir: Path) -> Path:
 
 def _derive_experiment_name(cfg: RunConfig) -> str:
     parts = [cfg.model.name, cfg.stream.dataset]
-    if cfg.stream.category:
-        parts.append(cfg.stream.category)
+    input_name = Path(cfg.stream.input_path).name
+    if input_name:
+        parts.append(input_name)
     if cfg.corruption.enabled and cfg.corruption.specs:
         for spec in cfg.corruption.specs:
             parts.append(f"{spec.kind}_s{spec.severity}")
@@ -75,10 +78,71 @@ def _jsonify(value: Any) -> Any:
     return value
 
 
+def _collect_hardware_info(model_device: str) -> dict[str, Any]:
+    info: dict[str, Any] = {
+        "platform": {
+            "system": platform.system(),
+            "release": platform.release(),
+            "version": platform.version(),
+            "machine": platform.machine(),
+            "processor": platform.processor(),
+        },
+        "cpu": {
+            "logical_cores": os.cpu_count(),
+        },
+        "accelerator": {
+            "requested_device": model_device,
+            "cuda_available": False,
+            "cuda_device_count": 0,
+            "cuda_devices": [],
+        },
+    }
+
+    try:
+        import torch
+    except ImportError:
+        info["accelerator"]["torch_available"] = False
+        return info
+
+    info["accelerator"]["torch_available"] = True
+    info["accelerator"]["torch_version"] = torch.__version__
+
+    try:
+        cuda_available = bool(torch.cuda.is_available())
+        cuda_devices: list[dict[str, Any]] = []
+        if cuda_available:
+            for device_index in range(torch.cuda.device_count()):
+                props = torch.cuda.get_device_properties(device_index)
+                cuda_devices.append(
+                    {
+                        "index": device_index,
+                        "name": props.name,
+                        "total_memory_mb": float(
+                            props.total_memory / (1024.0 * 1024.0)
+                        ),
+                        "compute_capability": [
+                            int(props.major),
+                            int(props.minor),
+                        ],
+                        "multiprocessor_count": int(props.multi_processor_count),
+                    }
+                )
+        info["accelerator"].update(
+            {
+                "cuda_available": cuda_available,
+                "cuda_device_count": len(cuda_devices),
+                "cuda_devices": cuda_devices,
+            }
+        )
+    except (RuntimeError, AttributeError) as exc:
+        info["accelerator"]["probe_error"] = f"{type(exc).__name__}: {exc}"
+
+    return info
+
+
 def _calibrate_threshold(
     cfg: RunConfig,
-    model,
-    warmup_frames: List[Frame],
+    scores: List[float],
 ) -> tuple[float, dict[str, Any]]:
     mode = cfg.metrics.threshold_mode
     if mode == "manual":
@@ -87,16 +151,10 @@ def _calibrate_threshold(
         return threshold, {"mode": mode, "threshold": threshold}
 
     if mode == "pot":
-        scores_list: list[float] = []
-        for frame in warmup_frames:
-            pred = model.predict(frame)
-            score = float(pred.score)
-            if math.isfinite(score):
-                scores_list.append(score)
-        scores_arr = np.asarray(scores_list, dtype=np.float64)
+        scores_arr = np.asarray(scores, dtype=np.float64)
         if scores_arr.size == 0:
             raise RuntimeError(
-                "pot calibration requires at least one finite warmup score"
+                "pot calibration requires at least one finite calibration score"
             )
         threshold, report = _pot_threshold(scores_arr, cfg.metrics.pot_risk)
         report.update({"mode": mode, "threshold": threshold})
@@ -109,7 +167,7 @@ def _pot_threshold(
     scores: np.ndarray, pot_risk: float
 ) -> tuple[float, dict[str, Any]]:
     """Siffer et al. 2017, KDD, §3.2. Fit a Generalized Pareto to the upper
-    tail of the warm-up scores and derive the threshold at target risk
+    tail of the calibration scores and derive the threshold at target risk
     `pot_risk` (false positive rate)."""
     init_q = 0.98
     u = float(np.quantile(scores, init_q))
@@ -117,7 +175,7 @@ def _pot_threshold(
     if tail.size < 10:
         raise RuntimeError(
             f"pot calibration: only {tail.size} exceedances above q={init_q} "
-            f"(need >= 10); increase warmup.warmup_steps"
+            f"(need >= 10); increase metrics.calibration_steps"
         )
     ksi, _, sigma = genpareto.fit(tail, floc=0.0)
     n, n_u = int(scores.size), int(tail.size)
@@ -133,7 +191,7 @@ def _pot_threshold(
         "pot_ksi": float(ksi),
         "pot_sigma": float(sigma),
         "pot_n_tail": n_u,
-        "n_warmup_scores": n,
+        "n_calibration_scores": n,
     }
 
 
@@ -189,19 +247,35 @@ def main() -> None:
         torch = None
     set_seeds(cfg.seed)
     warmup_stream = build_warmup_stream(cfg.stream, cfg.warmup.warmup_steps)
-    if not cfg.warmup.use_clean_frames:
-        warmup_stream = apply_corruption(warmup_stream, cfg.corruption)
     warmup_frames = warmup(model, warmup_stream, cfg.warmup)
-
-    print(f"[main] calibrating threshold mode={cfg.metrics.threshold_mode}...")
-    threshold, threshold_report = _calibrate_threshold(cfg, model, warmup_frames)
     cold_start_s = time.perf_counter() - cold_start_t0
-    print(
-        "[main] threshold ready: "
-        f"mode={threshold_report['mode']} value={threshold:.6f}"
-    )
 
-    resolved_metrics_cfg = dataclasses.replace(cfg.metrics, threshold_value=threshold)
+    if cfg.metrics.threshold_mode == "manual":
+        assert cfg.metrics.manual_threshold is not None
+        active_threshold = float(cfg.metrics.manual_threshold)
+        threshold_report: dict[str, Any] = {
+            "mode": "manual",
+            "threshold": active_threshold,
+        }
+        print(f"[main] threshold ready: mode=manual value={active_threshold:.6f}")
+    else:
+        active_threshold = float(cfg.metrics.initial_threshold)
+        threshold_report = {
+            "mode": "pot",
+            "initial_threshold": active_threshold,
+            "status": "calibrating",
+            "calibration_steps": cfg.metrics.calibration_steps,
+            "switch_frame": None,
+        }
+        print(
+            "[main] threshold initializing: "
+            f"mode=pot initial={active_threshold:.6f} "
+            f"calibration_steps={cfg.metrics.calibration_steps}"
+        )
+
+    resolved_metrics_cfg = dataclasses.replace(
+        cfg.metrics, threshold_value=active_threshold
+    )
     set_seeds(cfg.seed)
     stream = build_stream(cfg.stream, cfg.warmup.warmup_steps)
 
@@ -210,23 +284,67 @@ def main() -> None:
         model, warmup_frames, cfg.visualization.dashboard_enabled
     )
     viz = StreamVisualizer(
-        cfg.visualization, run_dir, threshold, warmup_embeddings
+        cfg.visualization, run_dir, active_threshold, warmup_embeddings
     )
 
     corrupted = apply_corruption(stream, cfg.corruption)
+    calibration_scores: list[float] = []
+    calibration_seen = 0
+    pot_ready = cfg.metrics.threshold_mode != "pot"
 
     print("[main] starting streaming inference loop")
     with FrameLogger(run_dir / "frames.jsonl") as frames_log:
         for frame in corrupted:
             pred = model.predict(frame)
-            metrics.update(frame, pred)
+            threshold_used = active_threshold
+            metrics.update(frame, pred, threshold_used)
             viz.render(frame, pred, metrics.snapshot())
-            frames_log.write(frame, pred)
+            frames_log.write(frame, pred, threshold_used)
             if frame.index % cfg.log_every == 0:
                 print(f"[step {frame.index}] {metrics.snapshot()}")
 
+            if not pot_ready:
+                calibration_seen += 1
+                score = float(pred.score)
+                if math.isfinite(score):
+                    calibration_scores.append(score)
+                if calibration_seen >= cfg.metrics.calibration_steps:
+                    active_threshold, threshold_report = _calibrate_threshold(
+                        cfg, calibration_scores
+                    )
+                    threshold_report.update(
+                        {
+                            "status": "calibrated",
+                            "initial_threshold": float(cfg.metrics.initial_threshold),
+                            "calibration_steps": cfg.metrics.calibration_steps,
+                            "calibration_seen": calibration_seen,
+                            "switch_frame": int(frame.index) + 1,
+                        }
+                    )
+                    metrics.set_threshold(active_threshold)
+                    pot_ready = True
+                    print(
+                        "[main] threshold switched: "
+                        f"mode=pot value={active_threshold:.6f} "
+                        f"after_frame={frame.index}"
+                    )
+
+    if not pot_ready:
+        threshold_report.update(
+            {
+                "status": "incomplete",
+                "calibration_seen": calibration_seen,
+                "n_calibration_scores": len(calibration_scores),
+                "threshold": active_threshold,
+            }
+        )
+
     report = metrics.finalize()
-    if torch is not None and torch.cuda.is_available() and cfg.model.device.startswith("cuda"):
+    if (
+        torch is not None
+        and torch.cuda.is_available()
+        and cfg.model.device.startswith("cuda")
+    ):
         peak_vram_mb = float(torch.cuda.max_memory_allocated() / (1024.0 * 1024.0))
     report["runtime"] = {
         "cold_start_s": cold_start_s,
@@ -237,6 +355,7 @@ def main() -> None:
         "experiment_name": experiment_name,
         "seed": cfg.seed,
     }
+    report["hardware"] = _collect_hardware_info(cfg.model.device)
     report["stream"] = dataclasses.asdict(cfg.stream)
     report["warmup"] = dataclasses.asdict(cfg.warmup)
     report["model"] = dataclasses.asdict(cfg.model)

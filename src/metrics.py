@@ -34,6 +34,12 @@ class OnlineMetrics:
         # global running counts
         self._n_seen = 0
         self._n_anomalies = 0
+        self._n_label_normals = 0
+        self._n_label_anomalies = 0
+        self._tp = 0
+        self._fp = 0
+        self._fn = 0
+        self._tn = 0
 
         # latency stats: running mean (Welford) + P² for p95
         self._lat_sum = 0.0
@@ -45,18 +51,33 @@ class OnlineMetrics:
         self._t_last: float | None = None
 
 
-    def update(self, frame: Frame, pred: Prediction) -> None:
+    def set_threshold(self, threshold: float) -> None:
+        if not math.isfinite(float(threshold)):
+            raise ValueError(f"threshold must be finite, got {threshold}")
+        self._threshold = float(threshold)
+
+
+    def update(
+        self, frame: Frame, pred: Prediction, threshold: float | None = None
+    ) -> None:
         now = time.perf_counter()
         if self._t_first is None:
             self._t_first = now
         self._t_last = now
 
+        threshold_used = self._threshold if threshold is None else float(threshold)
+        pred_label = _pred_label(pred.score, threshold_used)
         self._n_seen += 1
-        if frame.label == 1:
+        if pred_label == 1:
             self._n_anomalies += 1
 
         # only labelled frames contribute to AUROC / F1
         if frame.label in (0, 1):
+            if frame.label == 1:
+                self._n_label_anomalies += 1
+            else:
+                self._n_label_normals += 1
+            self._update_binary_counts(pred_label, frame.label)
             if np.isfinite(pred.score):
                 self._scores.append(float(pred.score))
                 self._labels.append(frame.label)
@@ -98,16 +119,26 @@ class OnlineMetrics:
         snap = self.snapshot()
         scores = np.asarray(self._all_scores, dtype=np.float64)
         labels = np.asarray(self._all_labels, dtype=np.int64)
-        precision, recall, f1, accuracy = _binary_metrics(
-            scores, labels, self._threshold
+        precision, recall, f1, accuracy = _binary_metrics_from_counts(
+            self._tp,
+            self._fp,
+            self._fn,
+            self._tn,
+            self._n_label_anomalies,
+            self._n_label_normals,
         )
         auroc = _exact_auroc(scores, labels)
         aupr = _exact_aupr(scores, labels)
         return {
             "n_seen": snap.n_seen,
             "n_anomalies": snap.n_anomalies,
+            "n_predicted_anomalies": snap.n_anomalies,
+            "n_label_anomalies": self._n_label_anomalies,
             "n_scored": int(labels.size),
             "n_nonfinite_scores": self._n_nonfinite_scores,
+            "labels_available": bool(
+                self._n_label_anomalies + self._n_label_normals > 0
+            ),
             "auroc": auroc,
             "aupr": aupr,
             "window_auroc": _auroc(self._scores, self._labels),
@@ -123,6 +154,17 @@ class OnlineMetrics:
             "threshold_mode": self.cfg.threshold_mode,
             "threshold_used": self._threshold,
         }
+
+
+    def _update_binary_counts(self, pred_label: int, true_label: int) -> None:
+        if pred_label == 1 and true_label == 1:
+            self._tp += 1
+        elif pred_label == 1 and true_label == 0:
+            self._fp += 1
+        elif pred_label == 0 and true_label == 1:
+            self._fn += 1
+        elif pred_label == 0 and true_label == 0:
+            self._tn += 1
 
 
 class FrameLogger:
@@ -141,14 +183,19 @@ class FrameLogger:
             self._fh.close()
             self._fh = None
 
-    def write(self, frame: Frame, pred: Prediction) -> None:
+    def write(self, frame: Frame, pred: Prediction, threshold: float) -> None:
         score = float(pred.score)
+        pred_label = _frame_pred_label(score, threshold)
+        image_id = frame.image_id or Path(frame.source_id).stem
         self._fh.write(
             json.dumps(
                 {
                     "idx": int(frame.index),
-                    "label": int(frame.label),
+                    "image_id": image_id,
                     "score": score if math.isfinite(score) else None,
+                    "pred_label": pred_label,
+                    "threshold_used": float(threshold),
+                    "true_label": int(frame.label),
                     "latency_ms": float(pred.latency_ms),
                 }
             )
@@ -200,6 +247,35 @@ def _binary_metrics(scores, labels, threshold: float) -> tuple[float, float, flo
     f1 = 2 * precision * recall / max(precision + recall, 1e-12)
     accuracy = (tp + tn) / max(tp + tn + fp + fn, 1)
     return float(precision), float(recall), float(f1), float(accuracy)
+
+
+def _binary_metrics_from_counts(
+    tp: int,
+    fp: int,
+    fn: int,
+    tn: int,
+    n_label_anomalies: int,
+    n_label_normals: int,
+) -> tuple[float, float, float, float]:
+    if n_label_anomalies == 0 or n_label_normals == 0:
+        return float("nan"), float("nan"), float("nan"), float("nan")
+    precision = tp / max(tp + fp, 1)
+    recall = tp / max(tp + fn, 1)
+    f1 = 2 * precision * recall / max(precision + recall, 1e-12)
+    accuracy = (tp + tn) / max(tp + tn + fp + fn, 1)
+    return float(precision), float(recall), float(f1), float(accuracy)
+
+
+def _pred_label(score: float, threshold: float) -> int:
+    if not math.isfinite(float(score)):
+        return 1
+    return int(float(score) >= float(threshold))
+
+
+def _frame_pred_label(score: float, threshold: float) -> int:
+    if not math.isfinite(float(score)):
+        return -1
+    return int(float(score) >= float(threshold))
 
 
 def _exact_auroc(scores: np.ndarray, labels: np.ndarray) -> float:

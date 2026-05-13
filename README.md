@@ -1,6 +1,5 @@
 # Evaluation of Unsupervised Defect Detection Models on Industrial Data Streams Under Corruption
 
-
 ## Goals
 
 1. Streaming inference and visualization for industrial image streams.
@@ -21,60 +20,76 @@ pip install -r requirements.txt
 specific CUDA build, install the matching `torch` / `torchvision` pair first
 and then install `requirements.txt`.
 
-## Data Layout
+## Input Data
 
-Datasets are not shipped with this repository. The `data/` directory is
-git-tracked (via `data/.gitkeep`) but its contents are ignored — download the
-dataset locally and lay it out as described below.
+Datasets are not shipped with this repository. The pipeline input is one flat
+folder configured through `stream.input_path`:
 
-The default `config.yaml` targets **Real-IAD** (multi-view industrial anomaly
-detection, 30 categories, `OK` / `NG` samples):
+```text
+data/
+  input_images/
+    image_0001.jpg
+    image_0002.jpg
+    image_0003.jpg
+    labels.json        # optional, only for benchmark metrics
+```
 
-- Project page: <https://realiad4ad.github.io/Real-IAD/>
-- License: CC BY-NC-SA 4.0 — research use only; access granted via the
-  request form on the project page.
+Rules:
 
-Extract the `realiad_1024` split so the tree matches:
+- `stream.input_path` must point directly to the folder containing the images.
+- Subfolders are not accepted by the pipeline. If your dataset is nested,
+  flatten/copy the images you want to stream into the input folder first.
+- Images are discovered from that folder only. Only suffixes listed in
+  `stream.extensions` are streamed.
+- `image_id` is the filename without extension. These ids must be unique.
+- If `labels.json` exists, it must be an object mapping `image_id` to exactly
+  `"OK"` or `"NG"`:
+
+```json
+{
+  "image_0001": "OK",
+  "image_0002": "NG"
+}
+```
+
+Missing ids are treated as unknown labels. Precision, recall, F1, accuracy,
+AUROC, and AUPR in `report.json` only use frames with labels.
+
+For Real-IAD, first extract the dataset, then prepare a flat input folder from
+the images you want to stream. The original Real-IAD tree looks like:
 
 ```text
 data/
   Real-IAD_dataset/
     realiad_1024/
-      <category>/             # e.g. audiojack, bottle_cap, ...
+      <category>/
         OK/
           <specimen>/
             *.jpg
         NG/
-          <defect>/            # e.g. BX, ...
+          <defect>/
             <specimen>/
               *.jpg
 ```
 
-Rules:
-
-- `stream.data_root` points at the resolution split (default
-  `data/Real-IAD_dataset/realiad_1024`).
-- `stream.category` must match a category directory name under `data_root`.
-- Normal frames live under `OK/`, anomalous frames under `NG/<defect>/`.
-- Images are discovered recursively. Only `.jpg` and `.jpeg` are streamed.
-- Any dataset that follows the same `OK/` / `NG/<defect>/` convention works
-  by pointing `stream.data_root` and `stream.category` at it.
-
 ## Config
+
 Main sections:
 
 - `seed`, `output_dir`, `log_every`
-- `stream`: dataset, category, data_root, extensions, shuffle, max_frames
-- `warmup`: warmup_steps, use_clean_frames
+- `stream`: dataset, input_path, extensions, shuffle, max_frames
+- `warmup`: warmup_steps
 - `model`: name, backbone, device, checkpoint
 - `corruption`: enabled, specs
-- `metrics`: window_size, threshold_mode, manual_threshold, pot_risk
+- `metrics`: window_size, threshold_mode, calibration_steps, initial_threshold, manual_threshold, pot_risk
 - `visualization`: mode, every_n_frames, overlay_alpha, dashboard_enabled, dashboard_host, dashboard_port, dashboard_max_live_points
 
 Current implementation notes:
 
-- `stream.dataset` is a free-form dataset name used in the output dir;
-  any dataset under `stream.data_root/<category>/{OK,NG}/...` works.
+- `stream.dataset` is a free-form dataset name used in the output dir.
+- Warm-up uses the first `warmup.warmup_steps` images from the configured
+  input order. With `stream.shuffle: true`, this means the first N images after
+  the seeded shuffle; with `false`, it means sorted filename order.
 - `model.name` supports `pca`, `patchcore`, `padim`, `subspacead`, `stfpm`, `csflow`, `draem`, `rd4ad`, and `efficientad`.
 - `efficientad` currently expects `model.checkpoint` to point to trained weights.
 - `visualization.mode: file` is the default path.
@@ -84,23 +99,23 @@ Current implementation notes:
   (six metric tiles, the current frame with heatmap overlay, and a
   PCA(2) projection of the per-frame embedding with the warm-up frames
   as a reference cloud). The dashboard runs orthogonally to
-  `visualization.mode` — any combination is valid. To use it from
+  `visualization.mode` - any combination is valid. To use it from
   Google Colab, expose the port with `pyngrok` or
   `google.colab.output.serve_kernel_port_as_window`; from a remote
   HPC node, use SSH local port forwarding
   (`ssh -L 8765:localhost:8765 user@host`).
 - `metrics.threshold_mode` currently supports `manual` and `pot`.
 - `pot` is the unsupervised threshold from Siffer et al. 2017 (KDD,
-  "Anomaly Detection in Streams with Extreme Value Theory"). It fits a
-  Generalized Pareto Distribution to the upper tail (above the 0.98
-  quantile) of the warm-up OK scores and derives the threshold that
-  corresponds to a target false-positive rate `metrics.pot_risk`
-  (default `1e-3`). It does not require labels. The chosen threshold
-  is reported in `report.json` under `threshold.{pot_u, pot_ksi,
-  pot_sigma, pot_n_tail, ...}` for traceability. Threshold-free
-  evaluation (`auroc`, `aupr` in the report) is unaffected by this
-  choice — the threshold only determines the binary metrics
-  (`precision`, `recall`, `f1`).
+  "Anomaly Detection in Streams with Extreme Value Theory"). The run starts
+  with `metrics.initial_threshold`, scores the first
+  `metrics.calibration_steps` post-warmup frames, fits a Generalized Pareto
+  Distribution to the upper tail (above the 0.98 quantile), then switches to
+  the calibrated threshold for subsequent frames. It does not require labels.
+  The chosen threshold is reported in `report.json` under
+  `threshold.{pot_u, pot_ksi, pot_sigma, pot_n_tail, ...}` for traceability.
+  Threshold-free evaluation (`auroc`, `aupr` in the report) is unaffected by
+  this choice; the threshold only determines the binary metrics
+  (`precision`, `recall`, `f1`, `accuracy`).
 
 ## Run
 
@@ -110,33 +125,33 @@ python main.py
 
 Reports are written under `output_dir/<experiment_name>/report.json`. The
 experiment name is derived per run from
-`{model.name}_{stream.dataset}_{stream.category}_{corruption_kind}_s{severity}_{YYYYMMDD-HHMMSS}`,
+`{model.name}_{stream.dataset}_{input_folder}_{corruption_kind}_s{severity}_{YYYYMMDD-HHMMSS}`,
 omitting the corruption block when `corruption.enabled` is false.
 
 Current per-run report fields include:
 
 - image-level quality: `auroc`, `aupr`, `precision`, `recall`, `f1`, `accuracy`
 - operational: `mean_latency_ms`, `p95_latency_ms`, `throughput_fps`
-- setup/runtime: `runtime.cold_start_s`, `runtime.peak_vram_mb`
+- setup/runtime: `runtime.cold_start_s`, `runtime.peak_vram_mb`, `hardware`
 - threshold metadata: `threshold.mode`, `threshold.threshold`
 
-The same per-run directory also contains `frames.jsonl` — one JSON object
-per frame (`{idx, label, score, latency_ms}`) written line-buffered during
-the streaming loop. Use it to recompute metrics at arbitrary thresholds,
-inspect OK/NG score distributions, or separate pure model latency from
-stream pacing. Load with `pandas.read_json(path, lines=True)`.
+The same per-run directory also contains `frames.jsonl` - one JSON object
+per frame (`{idx, image_id, score, pred_label, threshold_used, true_label,
+latency_ms}`) written line-buffered during the streaming loop. `pred_label`
+and `true_label` use `0` for OK, `1` for NG, and `-1` for unknown/unavailable.
+Load with `pandas.read_json(path, lines=True)`.
 
 Rendered frames from `visualization.mode: file` are written into the same
 per-run directory as the report: `output_dir/<experiment_name>/`.
 
 ## Active Modules
 
-- [src/schemas.py](src/schemas.py) — dataclasses and strict config loading
-- [src/stream.py](src/stream.py) — Dataset input stream construction
-- [src/models.py](src/models.py) — model construction and warm-up
-- [src/corruption.py](src/corruption.py) — per-frame corruptions
-- [src/metrics.py](src/metrics.py) — online metrics
-- [src/visualization.py](src/visualization.py) — streaming outputs
+- [src/schemas.py](src/schemas.py) - dataclasses and strict config loading
+- [src/stream.py](src/stream.py) - input stream construction
+- [src/models.py](src/models.py) - model construction and warm-up
+- [src/corruption.py](src/corruption.py) - per-frame corruptions
+- [src/metrics.py](src/metrics.py) - online metrics and final benchmark report
+- [src/visualization.py](src/visualization.py) - streaming outputs and dashboard
 
 ## Extending
 

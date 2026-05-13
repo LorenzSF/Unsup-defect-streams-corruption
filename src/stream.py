@@ -1,3 +1,4 @@
+import json
 import random
 import time
 from pathlib import Path
@@ -10,57 +11,32 @@ from .models import Model
 from .schemas import Frame, StreamConfig, WarmupConfig
 
 
-def build_warmup_stream(cfg: StreamConfig, warmup_steps: int) -> Iterator[Frame]:
-    """Yield up to `warmup_steps` OK frames, randomly chosen.
+Entry = Tuple[Path, int, str]
 
-    Used to bootstrap the model's normal-data state. Only OK frames are
-    returned; NG frames are reserved for the calibration / inference
-    streams so warmup fits on uncontaminated data.
-    """
-    ok_entries, _ = _discover_ok_ng(cfg)
-    if not ok_entries:
-        raise FileNotFoundError(
-            f"no OK images found for {cfg.dataset}/{cfg.category} under "
-            f"{Path(cfg.data_root).resolve()}"
-        )
-    if cfg.shuffle:
-        random.shuffle(ok_entries)
-    selected = ok_entries[:warmup_steps]
+
+def build_warmup_stream(cfg: StreamConfig, warmup_steps: int) -> Iterator[Frame]:
+    """Yield the first `warmup_steps` images from the configured input folder."""
+    entries = _discover_input_images(cfg)
+    selected = entries[:warmup_steps]
     yield from _yield_frames(selected)
 
 
 def build_stream(cfg: StreamConfig, warmup_steps: int) -> Iterator[Frame]:
-    """Yield the inference stream: remaining OK + all NG, mixed.
-
-    Disjoint from `build_warmup_stream` (the first `warmup_steps` OK of
-    the seeded shuffle). OK and NG are concatenated then shuffled
-    together so the inference loop sees them interleaved.
-    `cfg.max_frames` truncates the final list.
-    """
-    ok_entries, ng_entries = _discover_ok_ng(cfg)
-    if cfg.shuffle:
-        random.shuffle(ok_entries)
-    rest_ok = ok_entries[warmup_steps:]
-    inference_entries = rest_ok + ng_entries
-    if not inference_entries:
-        raise FileNotFoundError(
-            f"no inference frames left for {cfg.dataset}/{cfg.category} "
-            f"after reserving {warmup_steps} OK for warmup"
-        )
-    if cfg.shuffle:
-        random.shuffle(inference_entries)
+    """Yield the post-warmup inference stream from the configured input folder."""
+    entries = _discover_input_images(cfg)
+    inference_entries = entries[warmup_steps:]
     if cfg.max_frames is not None:
         inference_entries = inference_entries[: cfg.max_frames]
+    if not inference_entries:
+        raise FileNotFoundError(
+            f"no inference frames left under {Path(cfg.input_path).resolve()} "
+            f"after reserving {warmup_steps} frames for warmup"
+        )
     yield from _yield_frames(inference_entries)
 
 
 def warmup(model: Model, stream: Iterator[Frame], cfg: WarmupConfig) -> List[Frame]:
-    """Consume `cfg.warmup_steps` frames and call `model.fit_warmup`.
-
-    Returns the consumed frames so downstream code (e.g. threshold
-    calibration) can re-score them after fit without re-iterating the
-    stream.
-    """
+    """Consume `cfg.warmup_steps` frames and call `model.fit_warmup`."""
     if not hasattr(model, "fit_warmup"):
         raise TypeError(f"model {type(model).__name__} has no fit_warmup() method")
 
@@ -79,65 +55,90 @@ def warmup(model: Model, stream: Iterator[Frame], cfg: WarmupConfig) -> List[Fra
     return frames
 
 
-def _yield_frames(entries: List[Tuple[Path, int]]) -> Iterator[Frame]:
-    for index, (img_path, label) in enumerate(entries):
+def _yield_frames(entries: List[Entry]) -> Iterator[Frame]:
+    for index, (img_path, label, image_id) in enumerate(entries):
         yield Frame(
             image=_load_image(img_path),
             label=label,
             timestamp=time.time(),
             source_id=str(img_path.as_posix()),
+            image_id=image_id,
             index=index,
         )
 
 
-def _discover_ok_ng(
-    cfg: StreamConfig,
-) -> Tuple[List[Tuple[Path, int]], List[Tuple[Path, int]]]:
-    """Return (ok_entries, ng_entries) under `cfg.data_root / cfg.category`.
+def _discover_input_images(cfg: StreamConfig) -> List[Entry]:
+    root = Path(cfg.input_path)
+    if not root.is_dir():
+        raise FileNotFoundError(f"stream.input_path is not a directory: {root}")
 
-    Convention shared by Real-IAD, MVTec-AD, VisA and similar industrial
-    datasets:
-        <data_root>/<category>/OK/<specimen>/*.{ext}
-        <data_root>/<category>/NG/<defect>/<specimen>/*.{ext}
+    subdirs = sorted(p.name for p in root.iterdir() if p.is_dir())
+    if subdirs:
+        raise ValueError(
+            "stream.input_path must be a flat folder of images. "
+            "Subfolders are not supported; see README.md for the required input format. "
+            f"Found subfolders: {subdirs}"
+        )
 
-    or with one extra nested `<category>/` level:
-        <data_root>/<category>/<category>/OK/...
-        <data_root>/<category>/<category>/NG/...
-    """
-    root = _resolve_category_root(cfg)
     extensions = {ext.lower() for ext in cfg.extensions}
+    labels = _load_labels(root)
+    paths = list(_iter_images(root, extensions))
+    if not paths:
+        raise FileNotFoundError(
+            f"no images with extensions {sorted(extensions)} found under {root.resolve()}"
+        )
 
-    ok_entries: List[Tuple[Path, int]] = []
-    ok_dir = root / "OK"
-    if ok_dir.is_dir():
-        for img_path in _iter_images(ok_dir, extensions):
-            ok_entries.append((img_path, 0))
+    seen_ids: Set[str] = set()
+    entries: List[Entry] = []
+    for img_path in paths:
+        image_id = img_path.stem
+        if image_id in seen_ids:
+            raise ValueError(
+                f"duplicate image id {image_id!r} under {root}; "
+                "filenames without extension must be unique"
+            )
+        seen_ids.add(image_id)
+        entries.append((img_path, labels.get(image_id, -1), image_id))
 
-    ng_entries: List[Tuple[Path, int]] = []
-    ng_dir = root / "NG"
-    if ng_dir.is_dir():
-        for defect_dir in sorted(p for p in ng_dir.iterdir() if p.is_dir()):
-            for img_path in _iter_images(defect_dir, extensions):
-                ng_entries.append((img_path, 1))
+    unknown_label_ids = sorted(set(labels) - seen_ids)
+    if unknown_label_ids:
+        raise ValueError(
+            "labels.json contains ids that do not match any input image: "
+            f"{unknown_label_ids}"
+        )
 
-    return ok_entries, ng_entries
+    if cfg.shuffle:
+        random.shuffle(entries)
+    return entries
 
 
-def _resolve_category_root(cfg: StreamConfig) -> Path:
-    base = Path(cfg.data_root)
-    direct = base / cfg.category
-    nested = direct / cfg.category
-    for candidate in (direct, nested):
-        if (candidate / "OK").is_dir() or (candidate / "NG").is_dir():
-            return candidate
-    raise FileNotFoundError(
-        f"missing category folder for '{cfg.category}'. "
-        f"Expected '{direct}' or '{nested}' with OK/ and/or NG/ subfolders."
-    )
+def _load_labels(root: Path) -> dict[str, int]:
+    path = root / "labels.json"
+    if not path.exists():
+        return {}
+    with path.open("r", encoding="utf-8") as f:
+        raw = json.load(f)
+    if not isinstance(raw, dict):
+        raise TypeError("labels.json must be an object mapping image_id to 'OK' or 'NG'")
+
+    labels: dict[str, int] = {}
+    for image_id, label in raw.items():
+        if not isinstance(image_id, str) or not image_id:
+            raise TypeError("labels.json keys must be non-empty image_id strings")
+        if label == "OK":
+            labels[image_id] = 0
+        elif label == "NG":
+            labels[image_id] = 1
+        else:
+            raise ValueError(
+                "labels.json values must be exactly 'OK' or 'NG', "
+                f"got {label!r} for image_id {image_id!r}"
+            )
+    return labels
 
 
 def _iter_images(root: Path, extensions: Set[str]) -> Iterator[Path]:
-    for path in sorted(root.rglob("*")):
+    for path in sorted(root.iterdir()):
         if not path.is_file():
             continue
         if path.suffix.lower() not in extensions:

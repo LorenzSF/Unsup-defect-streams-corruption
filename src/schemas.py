@@ -13,6 +13,7 @@ class Frame:
     timestamp: float
     source_id: str
     index: int
+    image_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -57,8 +58,7 @@ class CorruptionSpec:
 @dataclass(frozen=True)
 class StreamConfig:
     dataset: str
-    category: str
-    data_root: str
+    input_path: str
     extensions: List[str]
     shuffle: bool
     max_frames: Optional[int]
@@ -66,10 +66,8 @@ class StreamConfig:
     def __post_init__(self) -> None:
         if not self.dataset:
             raise ValueError("StreamConfig.dataset must be non-empty")
-        if not self.category:
-            raise ValueError("StreamConfig.category must be non-empty")
-        if not self.data_root:
-            raise ValueError("StreamConfig.data_root must be non-empty")
+        if not self.input_path:
+            raise ValueError("StreamConfig.input_path must be non-empty")
         if not self.extensions:
             raise ValueError("StreamConfig.extensions must be non-empty")
         for ext in self.extensions:
@@ -87,7 +85,6 @@ class StreamConfig:
 @dataclass(frozen=True)
 class WarmupConfig:
     warmup_steps: int
-    use_clean_frames: bool
 
     def __post_init__(self) -> None:
         if self.warmup_steps <= 0:
@@ -124,8 +121,10 @@ class CorruptionConfig:
 class MetricsConfig:
     window_size: int
     threshold_mode: str = "manual"
+    calibration_steps: int = 0
+    initial_threshold: float = 0.5
     manual_threshold: Optional[float] = 0.5
-    threshold_value: Optional[float] = 0.5
+    threshold_value: Optional[float] = None
     pot_risk: float = 1e-3
 
     def __post_init__(self) -> None:
@@ -142,6 +141,21 @@ class MetricsConfig:
             raise ValueError(
                 "MetricsConfig.manual_threshold must be set when "
                 "threshold_mode == 'manual'"
+            )
+        if self.calibration_steps < 0:
+            raise ValueError(
+                "MetricsConfig.calibration_steps must be >= 0, "
+                f"got {self.calibration_steps}"
+            )
+        if self.threshold_mode == "pot" and self.calibration_steps <= 0:
+            raise ValueError(
+                "MetricsConfig.calibration_steps must be > 0 when "
+                "threshold_mode == 'pot'"
+            )
+        if not np.isfinite(self.initial_threshold):
+            raise ValueError(
+                "MetricsConfig.initial_threshold must be finite, "
+                f"got {self.initial_threshold}"
             )
         if self.manual_threshold is not None and not np.isfinite(self.manual_threshold):
             raise ValueError(

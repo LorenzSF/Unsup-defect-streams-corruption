@@ -25,17 +25,24 @@ def build_warmup_stream(cfg: StreamConfig, warmup_steps: int) -> Iterator[Frame]
     yield from _yield_frames(selected)
 
 
-def build_stream(cfg: StreamConfig, warmup_steps: int) -> Iterator[Frame]:
+def build_stream(
+    cfg: StreamConfig, warmup_steps: int, presorted_prefix: int = 0
+) -> Iterator[Frame]:
     """Yield the post-warmup inference stream from the configured input folder.
 
-    The slice `entries[warmup_steps:]` is shuffled in place when `cfg.shuffle`
-    is true, so warmup frames remain unshuffled and disjoint from the
-    inference stream.
+    `entries[warmup_steps:]` is the inference slice. When `cfg.shuffle` is
+    true, only `inference_entries[presorted_prefix:]` is shuffled in place;
+    the first `presorted_prefix` inference frames keep their sorted order.
+    The caller (main.py) passes `cfg.metrics.calibration_steps` here so the
+    threshold-calibration window draws from the sorted, OK-first prefix
+    before the rest of the stream is randomized.
     """
     entries = _discover_input_images(cfg)
     inference_entries = entries[warmup_steps:]
-    if cfg.shuffle:
-        random.shuffle(inference_entries)
+    if cfg.shuffle and presorted_prefix < len(inference_entries):
+        tail = inference_entries[presorted_prefix:]
+        random.shuffle(tail)
+        inference_entries = inference_entries[:presorted_prefix] + tail
     if cfg.max_frames is not None:
         inference_entries = inference_entries[: cfg.max_frames]
     if not inference_entries:

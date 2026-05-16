@@ -181,17 +181,58 @@ class FrameLogger:
     def write(self, frame: Frame, pred: Prediction, threshold: float) -> None:
         score = float(pred.score)
         pred_label = _frame_pred_label(score, threshold)
+        self._write_record(
+            frame=frame,
+            phase="evaluation",
+            score=score if math.isfinite(score) else None,
+            pred_label=pred_label,
+            threshold_used=float(threshold),
+            latency_ms=float(pred.latency_ms),
+        )
+
+    def write_warmup(self, frame: Frame) -> None:
+        self._write_record(
+            frame=frame,
+            phase="warmup",
+            score=None,
+            pred_label=-1,
+            threshold_used=None,
+            latency_ms=None,
+        )
+
+    def write_threshold_calibration(self, frame: Frame, pred: Prediction) -> None:
+        score = float(pred.score)
+        self._write_record(
+            frame=frame,
+            phase="threshold_calibration",
+            score=score if math.isfinite(score) else None,
+            pred_label=-1,
+            threshold_used=None,
+            latency_ms=float(pred.latency_ms),
+        )
+
+    def _write_record(
+        self,
+        *,
+        frame: Frame,
+        phase: str,
+        score: float | None,
+        pred_label: int,
+        threshold_used: float | None,
+        latency_ms: float | None,
+    ) -> None:
         image_id = frame.image_id or Path(frame.source_id).stem
         self._fh.write(
             json.dumps(
                 {
                     "idx": int(frame.index),
                     "image_id": image_id,
-                    "score": score if math.isfinite(score) else None,
+                    "phase": phase,
+                    "score": score,
                     "pred_label": pred_label,
-                    "threshold_used": float(threshold),
+                    "threshold_used": threshold_used,
                     "true_label": int(frame.label),
-                    "latency_ms": float(pred.latency_ms),
+                    "latency_ms": latency_ms,
                 }
             )
             + "\n"

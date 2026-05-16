@@ -88,8 +88,10 @@ Current implementation notes:
 
 - `stream.dataset` is a free-form dataset name used in the output dir.
 - Warm-up uses the first `warmup.warmup_steps` images from the configured
-  input order. With `stream.shuffle: true`, this means the first N images after
-  the seeded shuffle; with `false`, it means sorted filename order.
+  sorted input order.
+- Threshold calibration uses the first `metrics.calibration_steps` post-warmup
+  frames from that same sorted order. With `stream.shuffle: true`, only the
+  remaining post-calibration stream is shuffled.
 - `model.name` supports `pca`, `patchcore`, `padim`, `subspacead`, `stfpm`, `csflow`, `draem`, `rd4ad`, and `efficientad`.
 - `efficientad` currently expects `model.checkpoint` to point to trained weights.
 - `visualization.mode: file` is the default path.
@@ -140,11 +142,15 @@ Current per-run report fields include:
 - operational: `mean_latency_ms`, `p95_latency_ms`, `throughput_fps`
 - setup/runtime: `runtime.cold_start_s`, `runtime.peak_vram_mb`, `hardware`
 - threshold metadata: `threshold.mode`, `threshold.threshold`
+- evaluation metadata: calibration frames excluded from benchmark metrics
 
 The same per-run directory also contains `frames.jsonl` - one JSON object
-per frame (`{idx, image_id, score, pred_label, threshold_used, true_label,
-latency_ms}`) written line-buffered during the streaming loop. `pred_label`
-and `true_label` use `0` for OK, `1` for NG, and `-1` for unknown/unavailable.
+per frame (`{idx, image_id, phase, score, pred_label, threshold_used,
+true_label, latency_ms}`) written line-buffered during the run. Warm-up and
+threshold-calibration frames are logged with `pred_label: -1` and are excluded
+from benchmark metrics. Evaluation frames start only after threshold calibration
+has completed. `pred_label` and `true_label` use `0` for OK, `1` for NG, and
+`-1` for unknown/unavailable.
 Load with `pandas.read_json(path, lines=True)`.
 
 Rendered frames from `visualization.mode: file` are written into the same

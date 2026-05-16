@@ -269,7 +269,11 @@ def main() -> None:
         cfg.metrics, threshold_value=active_threshold
     )
     set_seeds(cfg.seed)
-    stream = build_stream(cfg.stream, cfg.warmup.warmup_steps)
+    stream = build_stream(
+        cfg.stream,
+        cfg.warmup.warmup_steps,
+        cfg.metrics.calibration_steps,
+    )
 
     metrics = OnlineMetrics(resolved_metrics_cfg)
     warmup_projection_vectors = _collect_warmup_projection_vectors(
@@ -287,23 +291,22 @@ def main() -> None:
     calibration_scores: list[float] = []
     calibration_seen = 0
     threshold_ready = False
+    evaluation_start_frame: int | None = None
 
     print("[main] starting streaming inference loop")
     with FrameLogger(run_dir / "frames.jsonl") as frames_log:
+        for frame in warmup_frames:
+            frames_log.write_warmup(frame)
+
         for frame in corrupted:
             pred = model.predict(frame)
-            threshold_used = active_threshold
-            metrics.update(frame, pred, threshold_used)
-            viz.render(frame, pred, metrics.snapshot())
-            frames_log.write(frame, pred, threshold_used)
-            if frame.index % cfg.log_every == 0:
-                print(f"[step {frame.index}] {metrics.snapshot()}")
 
             if not threshold_ready:
                 calibration_seen += 1
                 score = float(pred.score)
                 if math.isfinite(score):
                     calibration_scores.append(score)
+                frames_log.write_threshold_calibration(frame, pred)
                 if calibration_seen >= cfg.metrics.calibration_steps:
                     active_threshold, threshold_report = _calibrate_threshold(
                         cfg, calibration_scores
@@ -321,12 +324,21 @@ def main() -> None:
                     metrics.set_threshold(active_threshold)
                     viz.set_threshold(active_threshold)
                     threshold_ready = True
+                    evaluation_start_frame = int(frame.index) + 1
                     print(
                         "[main] threshold switched: "
                         f"mode={cfg.metrics.threshold_mode} "
                         f"value={active_threshold:.6f} "
                         f"after_frame={frame.index}"
                     )
+                continue
+
+            threshold_used = active_threshold
+            metrics.update(frame, pred, threshold_used)
+            viz.render(frame, pred, metrics.snapshot())
+            frames_log.write(frame, pred, threshold_used)
+            if frame.index % cfg.log_every == 0:
+                print(f"[step {frame.index}] {metrics.snapshot()}")
 
     if not threshold_ready:
         threshold_report.update(
@@ -350,6 +362,13 @@ def main() -> None:
         "peak_vram_mb": peak_vram_mb,
     }
     report["threshold"] = threshold_report
+    report["evaluation"] = {
+        "metrics_start": "after_threshold_calibration",
+        "warmup_frames_excluded": len(warmup_frames),
+        "threshold_calibration_frames_excluded": calibration_seen,
+        "starts_at_stream_frame": evaluation_start_frame,
+        "n_evaluation_frames": report["n_seen"],
+    }
     report["run"] = {
         "experiment_name": experiment_name,
         "seed": cfg.seed,

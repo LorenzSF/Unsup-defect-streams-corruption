@@ -137,14 +137,14 @@ These are hard constraints for this repository:
 
 ## 6. Corruption rules
 
-1. **Severity is integer 1..5.** Do not introduce fractional or unbounded
+1. **Severity is integer 1..3.** Do not introduce fractional or unbounded
    severity.
 2. **Register kernels explicitly.** New kernels belong in `src/corruption.py`
    and `_CORRUPTIONS`.
 3. **Kernel signature stays simple.** A corruption kernel takes
    `(img: np.ndarray, severity: int) -> np.ndarray` and returns a `uint8`
    `HxWx3` image.
-4. **Severity tables are monotonic.** Five entries, ordered from mild to severe.
+4. **Severity tables are monotonic.** Three entries, ordered from mild to severe.
 5. **Sampling is per spec per frame.** Multiple corruptions may compose. Do not
    silently change this to "pick one corruption".
 6. **Preserve pass-through behavior.** When no corruption applies, yield the

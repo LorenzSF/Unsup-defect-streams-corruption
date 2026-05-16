@@ -758,8 +758,9 @@ class StreamVisualizer:
         composite = _compose(frame, pred, snapshot, self.cfg.overlay_alpha)
 
         if self.cfg.mode == "file":
-            out = self._out_dir / f"frame_{frame.index:06d}.png"
-            Image.fromarray(composite).save(out)
+            if pred.score >= self._threshold:
+                out = self._out_dir / f"frame_{frame.index:06d}.png"
+                Image.fromarray(composite).save(out)
         elif self.cfg.mode == "window":
             try:
                 import cv2  # type: ignore

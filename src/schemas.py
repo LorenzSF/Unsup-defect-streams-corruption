@@ -44,9 +44,9 @@ class CorruptionSpec:
     def __post_init__(self) -> None:
         if not self.kind:
             raise ValueError("CorruptionSpec.kind must be non-empty")
-        if not 1 <= self.severity <= 5:
+        if not 1 <= self.severity <= 3:
             raise ValueError(
-                f"CorruptionSpec.severity must be in 1..5, got {self.severity}"
+                f"CorruptionSpec.severity must be in 1..3, got {self.severity}"
             )
         if not 0.0 <= self.probability <= 1.0:
             raise ValueError(

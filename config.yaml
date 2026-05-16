@@ -42,4 +42,4 @@ visualization:
   dashboard_enabled: true             # serve a live dashboard while main.py runs
   dashboard_host: 127.0.0.1           # bind address; 0.0.0.0 to expose on LAN
   dashboard_port: 8765                # http port for the dashboard
-  dashboard_max_live_points: 200      # ring-buffer size for live embedding points
+  dashboard_max_live_points: 12000    # ring-buffer size for live embedding points

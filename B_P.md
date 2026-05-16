@@ -19,8 +19,7 @@ Every line of code must serve at least one of these goals:
    same stream, corruption, threshold, and seed settings, then compare their
    `report.json` outputs.
 3. **Robustness under environmental noise.** Measure the effect of synthetic
-   corruptions such as blur, noise, JPEG artifacts, lighting changes, and sensor
-   degradation.
+   corruptions such as noise, blur, brightness shifts, and contrast loss.
 
 If code does not support one of these goals, remove it or do not add it.
 
@@ -158,9 +157,9 @@ These are hard constraints for this repository:
    latency just to compute final statistics.
 2. **Snapshots work mid-stream.** `snapshot()` must remain callable before
    `finalize()`.
-3. **Threshold logic is centralized in `main.py`.** Current modes are `manual`
-   and `pot`. Adding a mode requires schema validation, calibration/reporting
-   logic, and README documentation.
+3. **Threshold logic is centralized in `main.py`.** Current modes are
+   `max_score_ok` and `pot`. Adding a mode requires schema validation,
+   calibration/reporting logic, and README documentation.
 4. **Label handling is explicit.** Frames with unknown labels must not silently
    contaminate AUROC, AUPR, precision, recall, F1, or accuracy.
 5. **Reports are self-describing.** `report.json` must include enough config,

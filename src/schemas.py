@@ -120,10 +120,9 @@ class CorruptionConfig:
 @dataclass(frozen=True)
 class MetricsConfig:
     window_size: int
-    threshold_mode: str = "manual"
-    calibration_steps: int = 0
+    threshold_mode: str = "max_score_ok"
+    calibration_steps: int = 1
     initial_threshold: float = 0.5
-    manual_threshold: Optional[float] = 0.5
     threshold_value: Optional[float] = None
     pot_risk: float = 1e-3
 
@@ -132,35 +131,20 @@ class MetricsConfig:
             raise ValueError(
                 f"MetricsConfig.window_size must be > 0, got {self.window_size}"
             )
-        if self.threshold_mode not in {"manual", "pot"}:
+        if self.threshold_mode not in {"max_score_ok", "pot"}:
             raise ValueError(
                 "MetricsConfig.threshold_mode must be one of "
-                f"'manual', 'pot', got {self.threshold_mode!r}"
+                f"'max_score_ok', 'pot', got {self.threshold_mode!r}"
             )
-        if self.threshold_mode == "manual" and self.manual_threshold is None:
+        if self.calibration_steps <= 0:
             raise ValueError(
-                "MetricsConfig.manual_threshold must be set when "
-                "threshold_mode == 'manual'"
-            )
-        if self.calibration_steps < 0:
-            raise ValueError(
-                "MetricsConfig.calibration_steps must be >= 0, "
+                "MetricsConfig.calibration_steps must be > 0, "
                 f"got {self.calibration_steps}"
-            )
-        if self.threshold_mode == "pot" and self.calibration_steps <= 0:
-            raise ValueError(
-                "MetricsConfig.calibration_steps must be > 0 when "
-                "threshold_mode == 'pot'"
             )
         if not np.isfinite(self.initial_threshold):
             raise ValueError(
                 "MetricsConfig.initial_threshold must be finite, "
                 f"got {self.initial_threshold}"
-            )
-        if self.manual_threshold is not None and not np.isfinite(self.manual_threshold):
-            raise ValueError(
-                "MetricsConfig.manual_threshold must be finite when set, "
-                f"got {self.manual_threshold}"
             )
         if self.threshold_value is not None and not np.isfinite(self.threshold_value):
             raise ValueError(

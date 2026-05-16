@@ -81,7 +81,7 @@ Main sections:
 - `warmup`: warmup_steps
 - `model`: name, backbone, device, checkpoint
 - `corruption`: enabled, specs
-- `metrics`: window_size, threshold_mode, calibration_steps, initial_threshold, manual_threshold, pot_risk
+- `metrics`: window_size, threshold_mode, calibration_steps, initial_threshold, pot_risk
 - `visualization`: mode, every_n_frames, overlay_alpha, dashboard_enabled, dashboard_host, dashboard_port, dashboard_max_live_points
 
 Current implementation notes:
@@ -106,14 +106,18 @@ Current implementation notes:
   `google.colab.output.serve_kernel_port_as_window`; from a remote
   HPC node, use SSH local port forwarding
   (`ssh -L 8765:localhost:8765 user@host`).
-- `metrics.threshold_mode` currently supports `manual` and `pot`.
-- `pot` is the unsupervised threshold from Siffer et al. 2017 (KDD,
-  "Anomaly Detection in Streams with Extreme Value Theory"). The run starts
-  with `metrics.initial_threshold`, scores the first
-  `metrics.calibration_steps` post-warmup frames, fits a Generalized Pareto
-  Distribution to the upper tail (above the 0.98 quantile), then switches to
-  the calibrated threshold for subsequent frames. It does not require labels.
-  The chosen threshold is reported in `report.json` under
+- `metrics.threshold_mode` currently supports `max_score_ok` and `pot`.
+- Supported `corruption.specs[].kind` values are `gaussian_noise`,
+  `shot_noise`, `motion_blur`, `defocus_blur`, `brightness`, and `contrast`.
+- Both threshold modes start with `metrics.initial_threshold`, score the first
+  `metrics.calibration_steps` post-warmup frames, then switch to the calibrated
+  threshold for subsequent frames. `max_score_ok` uses the maximum finite score
+  from the calibration window and assumes that window is OK-only by construction;
+  `pot` fits the unsupervised threshold from Siffer et al. 2017 (KDD, "Anomaly
+  Detection in Streams with Extreme Value Theory") using a Generalized Pareto
+  Distribution over the upper tail (above the 0.98 quantile). Neither mode
+  requires labels for threshold calibration.
+  The chosen threshold is reported in `report.json`; POT also reports
   `threshold.{pot_u, pot_ksi, pot_sigma, pot_n_tail, ...}` for traceability.
   Threshold-free evaluation (`auroc`, `aupr` in the report) is unaffected by
   this choice; the threshold only determines the binary metrics

@@ -145,17 +145,21 @@ def _calibrate_threshold(
     scores: List[float],
 ) -> tuple[float, dict[str, Any]]:
     mode = cfg.metrics.threshold_mode
-    if mode == "manual":
-        assert cfg.metrics.manual_threshold is not None
-        threshold = float(cfg.metrics.manual_threshold)
-        return threshold, {"mode": mode, "threshold": threshold}
+    scores_arr = np.asarray(scores, dtype=np.float64)
+    if scores_arr.size == 0:
+        raise RuntimeError(
+            f"{mode} calibration requires at least one finite calibration score"
+        )
+
+    if mode == "max_score_ok":
+        threshold = float(np.max(scores_arr))
+        return threshold, {
+            "mode": mode,
+            "threshold": threshold,
+            "n_calibration_scores": int(scores_arr.size),
+        }
 
     if mode == "pot":
-        scores_arr = np.asarray(scores, dtype=np.float64)
-        if scores_arr.size == 0:
-            raise RuntimeError(
-                "pot calibration requires at least one finite calibration score"
-            )
         threshold, report = _pot_threshold(scores_arr, cfg.metrics.pot_risk)
         report.update({"mode": mode, "threshold": threshold})
         return threshold, report
@@ -247,28 +251,19 @@ def main() -> None:
     warmup_frames = warmup(model, warmup_stream, cfg.warmup)
     cold_start_s = time.perf_counter() - cold_start_t0
 
-    if cfg.metrics.threshold_mode == "manual":
-        assert cfg.metrics.manual_threshold is not None
-        active_threshold = float(cfg.metrics.manual_threshold)
-        threshold_report: dict[str, Any] = {
-            "mode": "manual",
-            "threshold": active_threshold,
-        }
-        print(f"[main] threshold ready: mode=manual value={active_threshold:.6f}")
-    else:
-        active_threshold = float(cfg.metrics.initial_threshold)
-        threshold_report = {
-            "mode": "pot",
-            "initial_threshold": active_threshold,
-            "status": "calibrating",
-            "calibration_steps": cfg.metrics.calibration_steps,
-            "switch_frame": None,
-        }
-        print(
-            "[main] threshold initializing: "
-            f"mode=pot initial={active_threshold:.6f} "
-            f"calibration_steps={cfg.metrics.calibration_steps}"
-        )
+    active_threshold = float(cfg.metrics.initial_threshold)
+    threshold_report: dict[str, Any] = {
+        "mode": cfg.metrics.threshold_mode,
+        "initial_threshold": active_threshold,
+        "status": "calibrating",
+        "calibration_steps": cfg.metrics.calibration_steps,
+        "switch_frame": None,
+    }
+    print(
+        "[main] threshold initializing: "
+        f"mode={cfg.metrics.threshold_mode} initial={active_threshold:.6f} "
+        f"calibration_steps={cfg.metrics.calibration_steps}"
+    )
 
     resolved_metrics_cfg = dataclasses.replace(
         cfg.metrics, threshold_value=active_threshold
@@ -291,7 +286,7 @@ def main() -> None:
     corrupted = apply_corruption(stream, cfg.corruption)
     calibration_scores: list[float] = []
     calibration_seen = 0
-    pot_ready = cfg.metrics.threshold_mode != "pot"
+    threshold_ready = False
 
     print("[main] starting streaming inference loop")
     with FrameLogger(run_dir / "frames.jsonl") as frames_log:
@@ -304,7 +299,7 @@ def main() -> None:
             if frame.index % cfg.log_every == 0:
                 print(f"[step {frame.index}] {metrics.snapshot()}")
 
-            if not pot_ready:
+            if not threshold_ready:
                 calibration_seen += 1
                 score = float(pred.score)
                 if math.isfinite(score):
@@ -319,19 +314,21 @@ def main() -> None:
                             "initial_threshold": float(cfg.metrics.initial_threshold),
                             "calibration_steps": cfg.metrics.calibration_steps,
                             "calibration_seen": calibration_seen,
+                            "n_calibration_scores": len(calibration_scores),
                             "switch_frame": int(frame.index) + 1,
                         }
                     )
                     metrics.set_threshold(active_threshold)
                     viz.set_threshold(active_threshold)
-                    pot_ready = True
+                    threshold_ready = True
                     print(
                         "[main] threshold switched: "
-                        f"mode=pot value={active_threshold:.6f} "
+                        f"mode={cfg.metrics.threshold_mode} "
+                        f"value={active_threshold:.6f} "
                         f"after_frame={frame.index}"
                     )
 
-    if not pot_ready:
+    if not threshold_ready:
         threshold_report.update(
             {
                 "status": "incomplete",

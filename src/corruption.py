@@ -1,5 +1,4 @@
 import dataclasses
-import io
 import random
 from typing import Callable, Iterator
 
@@ -84,23 +83,6 @@ def _contrast(img: np.ndarray, severity: int) -> np.ndarray:
     return (np.clip((x - mean) * factor + mean, 0, 1) * 255.0).astype(np.uint8)
 
 
-def _jpeg_compression(img: np.ndarray, severity: int) -> np.ndarray:
-    quality = [80, 65, 58][severity - 1]
-    buf = io.BytesIO()
-    Image.fromarray(img).save(buf, format="JPEG", quality=quality)
-    buf.seek(0)
-    return np.array(Image.open(buf).convert("RGB"))
-
-
-def _pixelate(img: np.ndarray, severity: int) -> np.ndarray:
-    factor = [0.6, 0.5, 0.4][severity - 1]
-    h, w = img.shape[:2]
-    nh, nw = max(1, int(h * factor)), max(1, int(w * factor))
-    pil = Image.fromarray(img)
-    small = pil.resize((nw, nh), Image.BOX)
-    return np.array(small.resize((w, h), Image.NEAREST))
-
-
 _CORRUPTIONS: dict[str, Callable[[np.ndarray, int], np.ndarray]] = {
     "gaussian_noise": _gaussian_noise,
     "shot_noise": _shot_noise,
@@ -108,6 +90,4 @@ _CORRUPTIONS: dict[str, Callable[[np.ndarray, int], np.ndarray]] = {
     "defocus_blur": _defocus_blur,
     "brightness": _brightness,
     "contrast": _contrast,
-    "jpeg_compression": _jpeg_compression,
-    "pixelate": _pixelate,
 }

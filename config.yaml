@@ -23,16 +23,15 @@ model:
 corruption:
   enabled: false
   specs:
-    - kind: jpeg_compression
+    - kind: gaussian_noise
       severity: 3
       probability: 1.0
 
 metrics:
   window_size: 500
-  threshold_mode: pot       # manual | pot
-  calibration_steps: 500    # first N post-warmup frames used to calibrate POT
-  initial_threshold: 0.8    # used until POT calibration is ready
-  manual_threshold: 0.8     # used only when threshold_mode == manual
+  threshold_mode: max_score_ok  # max_score_ok | pot
+  calibration_steps: 500    # first N post-warmup frames; keep OK-only for max_score_ok
+  initial_threshold: 0.8    # used until threshold calibration is ready
   pot_risk: 1.0e-3          # target false-positive rate for POT (Siffer et al. 2017)
 
 visualization:

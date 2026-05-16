@@ -14,15 +14,10 @@ from .schemas import Frame, MetricsConfig, MetricSnapshot, Prediction
 class OnlineMetrics:
     def __init__(self, cfg: MetricsConfig) -> None:
         self.cfg = cfg
-        self._threshold = (
-            cfg.threshold_value
-            if cfg.threshold_value is not None
-            else cfg.manual_threshold
-        )
+        self._threshold = cfg.threshold_value
         if self._threshold is None:
             raise ValueError(
-                "OnlineMetrics requires MetricsConfig.threshold_value or "
-                "MetricsConfig.manual_threshold to be set"
+                "OnlineMetrics requires MetricsConfig.threshold_value to be set"
             )
         self._scores: Deque[float] = deque(maxlen=cfg.window_size)
         self._labels: Deque[int] = deque(maxlen=cfg.window_size)

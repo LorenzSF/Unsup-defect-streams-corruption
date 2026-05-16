@@ -15,16 +15,27 @@ Entry = Tuple[Path, int, str]
 
 
 def build_warmup_stream(cfg: StreamConfig, warmup_steps: int) -> Iterator[Frame]:
-    """Yield the first `warmup_steps` images from the configured input folder."""
+    """Yield the first `warmup_steps` images from the sorted input listing.
+
+    The warmup slice ignores `cfg.shuffle` so the OK-first ordering produced
+    by `data/prepare_dataset.py` is preserved.
+    """
     entries = _discover_input_images(cfg)
     selected = entries[:warmup_steps]
     yield from _yield_frames(selected)
 
 
 def build_stream(cfg: StreamConfig, warmup_steps: int) -> Iterator[Frame]:
-    """Yield the post-warmup inference stream from the configured input folder."""
+    """Yield the post-warmup inference stream from the configured input folder.
+
+    The slice `entries[warmup_steps:]` is shuffled in place when `cfg.shuffle`
+    is true, so warmup frames remain unshuffled and disjoint from the
+    inference stream.
+    """
     entries = _discover_input_images(cfg)
     inference_entries = entries[warmup_steps:]
+    if cfg.shuffle:
+        random.shuffle(inference_entries)
     if cfg.max_frames is not None:
         inference_entries = inference_entries[: cfg.max_frames]
     if not inference_entries:
@@ -107,8 +118,6 @@ def _discover_input_images(cfg: StreamConfig) -> List[Entry]:
             f"{unknown_label_ids}"
         )
 
-    if cfg.shuffle:
-        random.shuffle(entries)
     return entries
 
 
